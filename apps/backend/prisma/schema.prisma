@@ -1,0 +1,172 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  STUDENT
+  FACULTY
+  DEPARTMENT_APPROVER
+  ADMINISTRATOR
+}
+
+enum ResourceCategory {
+  CLASSROOM
+  LAB
+  SEMINAR_HALL
+  MEETING_ROOM
+  SPORTS
+  EQUIPMENT
+  VEHICLE
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  CHECKED_IN
+  NO_SHOW
+  COMPLETED
+}
+
+enum ActivityType {
+  CLASS_LECTURE
+  LAB_SESSION
+  CLUB_EVENT
+  PROJECT_WORK
+  FACULTY_MEETING
+  EXAM_EVALUATION
+  SPORTS_PRACTICE
+  GUEST_SEMINAR
+}
+
+enum PriorityLevel {
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  name          String
+  role          Role           @default(STUDENT)
+  regNo         String?
+  department    String
+  designation   String?
+  phone         String?
+  avatarUrl     String?
+  bookings      Booking[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Resource {
+  id                 String           @id @default(uuid())
+  code               String           @unique
+  name               String
+  category           ResourceCategory
+  department         String
+  building           String
+  floor              String?
+  capacity           Int              @default(30)
+  amenities          String[]         @default([])
+  imageUrl           String
+  requiresApproval   Boolean          @default(false)
+  isAvailableNow     Boolean          @default(true)
+  isUnderMaintenance Boolean          @default(false)
+  maintenanceReason  String?
+  operatingHours     String           @default("08:00 AM - 08:00 PM")
+  bookings           Booking[]
+  timetableEntries   TimetableEntry[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model Booking {
+  id                 String        @id @default(uuid())
+  bookingNumber      String        @unique
+  userId             String
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId         String
+  resource           Resource      @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  startTime          DateTime
+  endTime            DateTime
+  purpose            String
+  activityType       ActivityType  @default(PROJECT_WORK)
+  expectedAttendance Int           @default(1)
+  priority           PriorityLevel @default(NORMAL)
+  status             BookingStatus @default(PENDING)
+  checkInToken       String?       @unique
+  checkedInAt        DateTime?
+  releaseDeadline    DateTime?
+  approvalNotes      String?
+  rejectionReason    String?
+  departmentId       String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([resourceId, startTime, endTime])
+  @@index([status])
+}
+
+model TimetableEntry {
+  id             String   @id @default(uuid())
+  resourceId     String
+  resource       Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  courseCode     String
+  courseName     String
+  instructorName String
+  dayOfWeek      Int // 0=Sunday, 1=Monday, ..., 6=Saturday
+  startTime      String // "10:00"
+  endTime        String // "12:00"
+  department     String
+  semester       String
+  section        String
+  createdAt      DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("SYSTEM") // BOOKING, APPROVAL, REMINDER, CHECKIN, SYSTEM
+  read      Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+}
+
+model DepartmentPolicy {
+  id                         String   @id @default(uuid())
+  department                 String   @unique
+  maxAdvanceDays             Int      @default(14)
+  maxBookingHoursPerWeek     Int      @default(20)
+  requireFacultyEndorsement Boolean  @default(true)
+  autoReleaseMinutes         Int      @default(15)
+  autoApproveStudentHours    Int      @default(2)
+  blackoutPeriods            String?  // JSON string
+  updatedAt                  DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  entityType String
+  entityId   String
+  details    String?
+  createdAt  DateTime @default(now())
+}
+
