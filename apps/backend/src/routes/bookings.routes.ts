@@ -240,7 +240,7 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
         status: initialStatus,
         checkInToken,
         releaseDeadline,
-        departmentId: resource.department,
+        departmentId: resource.departmentId || null,
       },
       include: {
         resource: true,

@@ -26,6 +26,7 @@ enum ResourceCategory {
 
 enum BookingStatus {
   PENDING
+  NEEDS_INFO
   APPROVED
   CONFIRMED
   REJECTED
@@ -53,21 +54,55 @@ enum PriorityLevel {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  passwordHash  String
-  name          String
-  role          Role           @default(STUDENT)
-  regNo         String?
-  department    String
-  designation   String?
-  phone         String?
-  avatarUrl     String?
-  bookings      Booking[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  passwordHash        String
+  name                String
+  role                Role                 @default(STUDENT)
+  regNo               String?
+  department          String
+  departmentId        String?
+  departmentRel       Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  designation         String?
+  phone               String?
+  avatarUrl           String?
+  bookings            Booking[]
+  decidedBookings     Booking[]            @relation("BookingDecidedBy")
+  bookingComments     BookingComment[]
+  approvalDecisions   ApprovalDecision[]
+  approverAssignments ApproverAssignment[]
+  delegationsFrom     Delegation[]         @relation("DelegationsFrom")
+  delegationsTo       Delegation[]         @relation("DelegationsTo")
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model Department {
+  id                  String               @id @default(uuid())
+  code                String               @unique
+  name                String               @unique
+  users               User[]
+  resources           Resource[]
+  bookings            Booking[]
+  approverAssignments ApproverAssignment[]
+  delegations         Delegation[]
+  departmentPolicies  DepartmentPolicy[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model ApproverAssignment {
+  id           String     @id @default(uuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  isPrimary    Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+
+  @@unique([userId, departmentId])
 }
 
 model Resource {
@@ -76,6 +111,8 @@ model Resource {
   name               String
   category           ResourceCategory
   department         String
+  departmentId       String?
+  departmentRel      Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   building           String
   floor              String?
   capacity           Int              @default(30)
@@ -93,30 +130,84 @@ model Resource {
 }
 
 model Booking {
-  id                 String        @id @default(uuid())
-  bookingNumber      String        @unique
+  id                 String             @id @default(uuid())
+  bookingNumber      String             @unique
   userId             String
-  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   resourceId         String
-  resource           Resource      @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  resource           Resource           @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   startTime          DateTime
   endTime            DateTime
   purpose            String
-  activityType       ActivityType  @default(PROJECT_WORK)
-  expectedAttendance Int           @default(1)
-  priority           PriorityLevel @default(NORMAL)
-  status             BookingStatus @default(PENDING)
-  checkInToken       String?       @unique
+  activityType       ActivityType       @default(PROJECT_WORK)
+  expectedAttendance Int                @default(1)
+  priority           PriorityLevel      @default(NORMAL)
+  status             BookingStatus      @default(PENDING)
+  checkInToken       String?            @unique
   checkedInAt        DateTime?
   releaseDeadline    DateTime?
   approvalNotes      String?
   rejectionReason    String?
   departmentId       String?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  department         Department?        @relation(fields: [departmentId], references: [id])
+  submittedAt        DateTime           @default(now())
+  decidedAt          DateTime?
+  decidedById        String?
+  decidedBy          User?              @relation("BookingDecidedBy", fields: [decidedById], references: [id])
+  slaDueAt           DateTime?
+  comments           BookingComment[]
+  approvalDecisions  ApprovalDecision[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   @@index([resourceId, startTime, endTime])
   @@index([status])
+}
+
+model BookingComment {
+  id         String   @id @default(uuid())
+  bookingId  String
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body       String
+  isInternal Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([bookingId])
+  @@index([authorId])
+}
+
+model Delegation {
+  id           String     @id @default(uuid())
+  fromUserId   String
+  fromUser     User       @relation("DelegationsFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId     String
+  toUser       User       @relation("DelegationsTo", fields: [toUserId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  startsAt     DateTime
+  endsAt       DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([departmentId, startsAt, endsAt])
+}
+
+model ApprovalDecision {
+  id         String   @id @default(uuid())
+  bookingId  String
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  approverId String
+  approver   User     @relation(fields: [approverId], references: [id], onDelete: Cascade)
+  action     String
+  reason     String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([bookingId])
+  @@index([approverId])
 }
 
 model TimetableEntry {
@@ -148,15 +239,19 @@ model Notification {
 }
 
 model DepartmentPolicy {
-  id                         String   @id @default(uuid())
-  department                 String   @unique
-  maxAdvanceDays             Int      @default(14)
-  maxBookingHoursPerWeek     Int      @default(20)
-  requireFacultyEndorsement Boolean  @default(true)
-  autoReleaseMinutes         Int      @default(15)
-  autoApproveStudentHours    Int      @default(2)
-  blackoutPeriods            String?  // JSON string
-  updatedAt                  DateTime @updatedAt
+  id                        String      @id @default(uuid())
+  department                String      @unique
+  departmentId              String?
+  departmentRel             Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  maxAdvanceDays            Int         @default(14)
+  maxBookingHoursPerWeek    Int         @default(20)
+  requireFacultyEndorsement Boolean     @default(true)
+  autoReleaseMinutes        Int         @default(15)
+  autoApproveStudentHours   Int         @default(2)
+  blackoutPeriods           String? // JSON string
+  approvalSlaHours          Int         @default(24)
+  escalateToRole            Role?
+  updatedAt                 DateTime    @updatedAt
 }
 
 model AuditLog {

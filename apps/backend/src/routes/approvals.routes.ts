@@ -1,28 +1,398 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, requireRole, AuthenticatedRequest } from '../middleware/auth';
-import { BookingStatus, Role } from '@prisma/client';
+import { BookingStatus, Role, ResourceCategory } from '@prisma/client';
+import {
+  processApprovalAction,
+  ApprovalError,
+  getAuthorizedDepartmentIds,
+} from '../services/approvalService';
 
 const router = Router();
 
-// GET /api/approvals
+/**
+ * Builds Prisma where-clause conditions to enforce department authorization scoping.
+ */
+function buildScopeFilter(authorizedDeptIds: string[] | null) {
+  if (authorizedDeptIds === null) {
+    return {}; // Admin has no department scope restriction
+  }
+  if (authorizedDeptIds.length === 0) {
+    // Approver has no assigned departments - return impossible match
+    return { id: '__no_access__' };
+  }
+
+  return {
+    OR: [
+      { departmentId: { in: authorizedDeptIds } },
+      { resource: { departmentId: { in: authorizedDeptIds } } },
+    ],
+  };
+}
+
+/**
+ * Enriches a booking record with Requester Summary, SLA metrics, and Competing Requests.
+ */
+async function enrichBooking(booking: any) {
+  const now = new Date();
+
+  // 1. Requester Summary: No-shows in last 30 days & Hours used this week
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
+  const startOfWeek = new Date(now);
+  const day = startOfWeek.getDay();
+  const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1); // Monday as start of week
+  startOfWeek.setDate(diff);
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  const endOfWeek = new Date(startOfWeek);
+  endOfWeek.setDate(startOfWeek.getDate() + 6);
+  endOfWeek.setHours(23, 59, 59, 999);
+
+  const [recentNoShowCount, weeklyBookings] = await Promise.all([
+    prisma.booking.count({
+      where: {
+        userId: booking.userId,
+        status: BookingStatus.NO_SHOW,
+        startTime: { gte: thirtyDaysAgo },
+      },
+    }),
+    prisma.booking.findMany({
+      where: {
+        userId: booking.userId,
+        status: { in: [BookingStatus.CONFIRMED, BookingStatus.CHECKED_IN, BookingStatus.COMPLETED] },
+        startTime: { gte: startOfWeek, lte: endOfWeek },
+      },
+      select: { startTime: true, endTime: true },
+    }),
+  ]);
+
+  const hoursUsedThisWeek = weeklyBookings.reduce((acc, b) => {
+    const duration = (new Date(b.endTime).getTime() - new Date(b.startTime).getTime()) / 3600000;
+    return acc + Math.max(0, duration);
+  }, 0);
+
+  // 2. SLA Metrics
+  let slaRemainingMs: number | null = null;
+  let slaStatus: 'ON_TIME' | 'DUE_SOON' | 'OVERDUE' = 'ON_TIME';
+
+  if (booking.slaDueAt) {
+    const dueTime = new Date(booking.slaDueAt).getTime();
+    slaRemainingMs = dueTime - now.getTime();
+    if (slaRemainingMs < 0) {
+      slaStatus = 'OVERDUE';
+    } else if (slaRemainingMs <= 4 * 3600000) {
+      slaStatus = 'DUE_SOON';
+    } else {
+      slaStatus = 'ON_TIME';
+    }
+  }
+
+  // 3. Competing PENDING Requests for the exact same resource & overlapping window
+  const competingBookings = await prisma.booking.findMany({
+    where: {
+      resourceId: booking.resourceId,
+      id: { not: booking.id },
+      status: BookingStatus.PENDING,
+      startTime: { lt: booking.endTime },
+      endTime: { gt: booking.startTime },
+    },
+    select: { id: true, bookingNumber: true, expectedAttendance: true, priority: true },
+  });
+
+  return {
+    ...booking,
+    requesterSummary: {
+      role: booking.user?.role || Role.STUDENT,
+      recentNoShowCount,
+      hoursUsedThisWeek: Math.round(hoursUsedThisWeek * 10) / 10,
+    },
+    sla: {
+      slaDueAt: booking.slaDueAt ? booking.slaDueAt.toISOString() : null,
+      remainingMs: slaRemainingMs,
+      status: slaStatus,
+    },
+    issues: {
+      hasCompetingPending: competingBookings.length > 0,
+      competingCount: competingBookings.length,
+      competingBookings,
+    },
+  };
+}
+
+// ============================================================================
+// 1. GET /api/approvals/stats - Approval Queue Metrics
+// ============================================================================
+router.get(
+  '/stats',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const approver = req.user!;
+      const authorizedDeptIds = await getAuthorizedDepartmentIds(approver);
+      const scopeFilter = buildScopeFilter(authorizedDeptIds);
+
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      const [pendingCount, overdueCount, approvedTodayCount, needsInfoCount, decidedBookings] = await Promise.all([
+        // Pending
+        prisma.booking.count({
+          where: {
+            ...scopeFilter,
+            status: BookingStatus.PENDING,
+          },
+        }),
+        // Overdue (Pending with slaDueAt < now)
+        prisma.booking.count({
+          where: {
+            ...scopeFilter,
+            status: BookingStatus.PENDING,
+            slaDueAt: { lt: now },
+          },
+        }),
+        // Approved today
+        prisma.booking.count({
+          where: {
+            ...scopeFilter,
+            status: { in: [BookingStatus.CONFIRMED, BookingStatus.APPROVED] },
+            decidedAt: { gte: todayStart },
+          },
+        }),
+        // Needs info
+        prisma.booking.count({
+          where: {
+            ...scopeFilter,
+            status: BookingStatus.NEEDS_INFO,
+          },
+        }),
+        // Average decision time calculation
+        prisma.booking.findMany({
+          where: {
+            ...scopeFilter,
+            NOT: { decidedAt: null },
+          },
+          select: { submittedAt: true, decidedAt: true },
+          take: 100,
+        }),
+      ]);
+
+      let averageDecisionTimeMinutes = 0;
+      if (decidedBookings.length > 0) {
+        const totalMinutes = decidedBookings.reduce((sum, b) => {
+          const diffMs = new Date(b.decidedAt!).getTime() - new Date(b.submittedAt).getTime();
+          return sum + Math.max(0, diffMs / 60000);
+        }, 0);
+        averageDecisionTimeMinutes = Math.round(totalMinutes / decidedBookings.length);
+      }
+
+      return res.json({
+        pending: pendingCount,
+        overdue: overdueCount,
+        approvedToday: approvedTodayCount,
+        averageDecisionTimeMinutes,
+        needsInfoCount,
+      });
+    } catch (err) {
+      console.error('Error fetching approval stats:', err);
+      return res.status(500).json({ error: 'Failed to retrieve approval statistics.' });
+    }
+  }
+);
+
+// ============================================================================
+// 2. GET /api/approvals - Department-Scoped Queue with Filters, Search & Pagination
+// ============================================================================
 router.get(
   '/',
   authenticateToken,
   requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { status } = req.query;
+      const approver = req.user!;
+      const authorizedDeptIds = await getAuthorizedDepartmentIds(approver);
 
-      const where: any = {};
-      if (status) {
-        where.status = status as BookingStatus;
-      } else {
-        where.status = BookingStatus.PENDING;
+      // If approver has no department assignment, return empty list immediately
+      if (authorizedDeptIds !== null && authorizedDeptIds.length === 0) {
+        return res.json({
+          requests: [],
+          total: 0,
+          page: 1,
+          limit: 10,
+          totalPages: 0,
+        });
       }
 
-      const requests = await prisma.booking.findMany({
-        where,
+      const scopeFilter = buildScopeFilter(authorizedDeptIds);
+
+      // Parse Query Parameters
+      const {
+        status,
+        department,
+        category,
+        requesterRole,
+        from,
+        to,
+        overdue,
+        search,
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        page = '1',
+        limit = '10',
+      } = req.query;
+
+      const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 10));
+      const skip = (pageNum - 1) * limitNum;
+
+      const where: any = {
+        AND: [scopeFilter],
+      };
+
+      // 1. Status Filter (default: PENDING, or specific status, or 'ALL')
+      if (status && status !== 'ALL') {
+        where.AND.push({ status: status as BookingStatus });
+      } else if (!status) {
+        where.AND.push({ status: BookingStatus.PENDING });
+      }
+
+      // 2. Specific Department Filter
+      if (department) {
+        where.AND.push({
+          OR: [
+            { departmentId: String(department) },
+            { department: { name: { contains: String(department), mode: 'insensitive' } } },
+            { department: { code: { equals: String(department), mode: 'insensitive' } } },
+            { resource: { department: { contains: String(department), mode: 'insensitive' } } },
+          ],
+        });
+      }
+
+      // 3. Category Filter
+      if (category) {
+        where.AND.push({
+          resource: { category: category as ResourceCategory },
+        });
+      }
+
+      // 4. Requester Role Filter
+      if (requesterRole) {
+        where.AND.push({
+          user: { role: requesterRole as Role },
+        });
+      }
+
+      // 5. Date Range Filter
+      if (from || to) {
+        const dateFilter: any = {};
+        if (from) dateFilter.gte = new Date(from as string);
+        if (to) dateFilter.lte = new Date(to as string);
+        where.AND.push({ startTime: dateFilter });
+      }
+
+      // 6. Overdue Filter
+      if (overdue === 'true') {
+        where.AND.push({
+          slaDueAt: { lt: new Date() },
+          status: BookingStatus.PENDING,
+        });
+      }
+
+      // 7. Search (bookingNumber, requester name, email, regNo)
+      if (search && String(search).trim() !== '') {
+        const query = String(search).trim();
+        where.AND.push({
+          OR: [
+            { bookingNumber: { contains: query, mode: 'insensitive' } },
+            { user: { name: { contains: query, mode: 'insensitive' } } },
+            { user: { email: { contains: query, mode: 'insensitive' } } },
+            { user: { regNo: { contains: query, mode: 'insensitive' } } },
+            { resource: { name: { contains: query, mode: 'insensitive' } } },
+          ],
+        });
+      }
+
+      // Dynamic Sorting
+      let orderBy: any = {};
+      const orderDirection = String(sortOrder).toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+      if (sortBy === 'priority') {
+        orderBy = { priority: orderDirection };
+      } else if (sortBy === 'slaDueAt') {
+        orderBy = { slaDueAt: orderDirection };
+      } else if (sortBy === 'startTime') {
+        orderBy = { startTime: orderDirection };
+      } else {
+        orderBy = { createdAt: orderDirection };
+      }
+
+      // Execute Count and FindMany in parallel
+      const [total, rawBookings] = await Promise.all([
+        prisma.booking.count({ where }),
+        prisma.booking.findMany({
+          where,
+          include: {
+            resource: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                regNo: true,
+                department: true,
+                avatarUrl: true,
+                phone: true,
+              },
+            },
+            department: true,
+            comments: {
+              include: {
+                author: {
+                  select: { id: true, name: true, role: true },
+                },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
+          },
+          orderBy,
+          skip,
+          take: limitNum,
+        }),
+      ]);
+
+      // Enrich items with SLA status, Competing requests, and Requester stats
+      const requests = await Promise.all(rawBookings.map((b) => enrichBooking(b)));
+
+      return res.json({
+        requests,
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
+      });
+    } catch (err) {
+      console.error('Error fetching approval queue:', err);
+      return res.status(500).json({ error: 'Failed to retrieve approval queue.' });
+    }
+  }
+);
+
+// ============================================================================
+// 3. GET /api/approvals/:id - Get Single Booking Request with Scoped Auth Check
+// ============================================================================
+router.get(
+  '/:id',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const approver = req.user!;
+      const authorizedDeptIds = await getAuthorizedDepartmentIds(approver);
+
+      const booking = await prisma.booking.findUnique({
+        where: { id },
         include: {
           resource: true,
           user: {
@@ -37,19 +407,54 @@ router.get(
               phone: true,
             },
           },
+          department: true,
+          comments: {
+            include: {
+              author: {
+                select: { id: true, name: true, role: true },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+          },
+          approvalDecisions: {
+            include: {
+              approver: {
+                select: { id: true, name: true, role: true },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
-        orderBy: { createdAt: 'desc' },
       });
 
-      return res.json({ requests });
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking request not found.' });
+      }
+
+      // Department Scope Authorization Check
+      if (authorizedDeptIds !== null) {
+        const bookingDeptId = booking.departmentId || booking.resource?.departmentId;
+        const isAuthorized = bookingDeptId ? authorizedDeptIds.includes(bookingDeptId) : false;
+
+        if (!isAuthorized) {
+          return res.status(403).json({
+            error: 'Forbidden: You do not have approval permissions for this department resource.',
+          });
+        }
+      }
+
+      const enriched = await enrichBooking(booking);
+      return res.json({ request: enriched });
     } catch (err) {
-      console.error('Error fetching approval requests:', err);
-      return res.status(500).json({ error: 'Failed to retrieve approval queue.' });
+      console.error('Error fetching approval request detail:', err);
+      return res.status(500).json({ error: 'Failed to retrieve booking request details.' });
     }
   }
 );
 
-// POST /api/approvals/:id/action
+// ============================================================================
+// 4. POST /api/approvals/:id/action - Actions via Approval Decision Engine (P3)
+// ============================================================================
 router.post(
   '/:id/action',
   authenticateToken,
@@ -57,137 +462,26 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { id } = req.params;
-      const { action, notes, reason, alternateResourceId, newStartTime, newEndTime } = req.body;
+      const { action, notes, reason, alternateResourceId, newStartTime, newEndTime, question } = req.body;
       const approver = req.user!;
 
-      const booking = await prisma.booking.findUnique({
-        where: { id },
-        include: { resource: true, user: true },
+      const result = await processApprovalAction({
+        bookingId: id,
+        approver,
+        action,
+        notes,
+        reason,
+        alternateResourceId,
+        newStartTime,
+        newEndTime,
+        question,
       });
 
-      if (!booking) {
-        return res.status(404).json({ error: 'Booking request not found.' });
+      return res.json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
       }
-
-      if (action === 'APPROVE') {
-        const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
-        const releaseDeadline = new Date(booking.startTime.getTime() + 15 * 60000);
-
-        const updated = await prisma.booking.update({
-          where: { id },
-          data: {
-            status: BookingStatus.CONFIRMED,
-            approvalNotes: notes || `Approved by ${approver.name} (${approver.designation || approver.role})`,
-            checkInToken,
-            releaseDeadline,
-          },
-        });
-
-        // Notify user
-        await prisma.notification.create({
-          data: {
-            userId: booking.userId,
-            title: `Request Approved: ${booking.resource.name}`,
-            message: `Your booking #${booking.bookingNumber} has been approved. Check-in code is ${checkInToken}.`,
-            type: 'APPROVAL',
-            link: '/my-bookings',
-          },
-        });
-
-        // Audit Log
-        await prisma.auditLog.create({
-          data: {
-            action: 'BOOKING_APPROVED',
-            userId: approver.id,
-            entityType: 'Booking',
-            entityId: id,
-            details: `Approved booking #${booking.bookingNumber} for ${booking.resource.name}`,
-          },
-        });
-
-        return res.json({
-          booking: updated,
-          message: 'Booking request approved successfully.',
-        });
-      } else if (action === 'REJECT') {
-        const updated = await prisma.booking.update({
-          where: { id },
-          data: {
-            status: BookingStatus.REJECTED,
-            rejectionReason: reason || 'Request does not meet department allocation criteria.',
-          },
-        });
-
-        // Notify user
-        await prisma.notification.create({
-          data: {
-            userId: booking.userId,
-            title: `Request Declined: ${booking.resource.name}`,
-            message: `Your booking request #${booking.bookingNumber} was declined. Reason: ${reason || 'Capacity/Policy limit reached'}.`,
-            type: 'APPROVAL',
-            link: '/my-bookings',
-          },
-        });
-
-        // Audit Log
-        await prisma.auditLog.create({
-          data: {
-            action: 'BOOKING_REJECTED',
-            userId: approver.id,
-            entityType: 'Booking',
-            entityId: id,
-            details: `Rejected booking #${booking.bookingNumber}. Reason: ${reason}`,
-          },
-        });
-
-        return res.json({
-          booking: updated,
-          message: 'Booking request rejected.',
-        });
-      } else if (action === 'MODIFY') {
-        // Approver modifies room or timing and confirms
-        const newResource = alternateResourceId
-          ? await prisma.resource.findUnique({ where: { id: alternateResourceId } })
-          : booking.resource;
-
-        const updatedStart = newStartTime ? new Date(newStartTime) : booking.startTime;
-        const updatedEnd = newEndTime ? new Date(newEndTime) : booking.endTime;
-
-        const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
-        const releaseDeadline = new Date(updatedStart.getTime() + 15 * 60000);
-
-        const updated = await prisma.booking.update({
-          where: { id },
-          data: {
-            resourceId: newResource?.id || booking.resourceId,
-            startTime: updatedStart,
-            endTime: updatedEnd,
-            status: BookingStatus.CONFIRMED,
-            approvalNotes: notes || `Modified and approved by ${approver.name}. Assigned to ${newResource?.name}.`,
-            checkInToken,
-            releaseDeadline,
-          },
-        });
-
-        // Notify user
-        await prisma.notification.create({
-          data: {
-            userId: booking.userId,
-            title: `Booking Modified & Approved: ${newResource?.name}`,
-            message: `Your request #${booking.bookingNumber} was modified and approved for ${newResource?.name} at ${updatedStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Check-in code is ${checkInToken}.`,
-            type: 'APPROVAL',
-            link: '/my-bookings',
-          },
-        });
-
-        return res.json({
-          booking: updated,
-          message: 'Booking modified and approved.',
-        });
-      } else {
-        return res.status(400).json({ error: 'Invalid approval action specified.' });
-      }
-    } catch (err) {
       console.error('Error processing approval action:', err);
       return res.status(500).json({ error: 'Failed to process approval action.' });
     }
@@ -195,4 +489,3 @@ router.post(
 );
 
 export default router;
-

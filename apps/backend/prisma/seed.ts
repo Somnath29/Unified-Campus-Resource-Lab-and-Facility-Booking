@@ -9,13 +9,37 @@ async function main() {
   // Clean existing records in reverse dependency order
   await prisma.auditLog.deleteMany({});
   await prisma.notification.deleteMany({});
+  await prisma.approvalDecision.deleteMany({});
+  await prisma.bookingComment.deleteMany({});
   await prisma.timetableEntry.deleteMany({});
   await prisma.booking.deleteMany({});
+  await prisma.delegation.deleteMany({});
+  await prisma.approverAssignment.deleteMany({});
   await prisma.resource.deleteMany({});
   await prisma.departmentPolicy.deleteMany({});
   await prisma.user.deleteMany({});
+  await prisma.department.deleteMany({});
 
   const defaultPasswordHash = await bcrypt.hash('Lpu@12345', 10);
+
+  // 0. Create Departments
+  const deptMap: Record<string, any> = {};
+  const deptDefs = [
+    { code: 'SCSE', name: 'School of Computer Science & Engineering' },
+    { code: 'SEEE', name: 'School of Electronics & Electrical Engineering' },
+    { code: 'SPORTS', name: 'Sports Complex & Athletics' },
+    { code: 'ESTATE', name: 'Estate & Transport Office' },
+    { code: 'INFRA', name: 'Campus Infrastructure & Estate Management' },
+    { code: 'SWCA', name: 'Student Welfare & Cultural Affairs' },
+    { code: 'CEE', name: 'Central Estate & Events' },
+  ];
+
+  for (const d of deptDefs) {
+    deptMap[d.name] = await prisma.department.create({
+      data: d,
+    });
+  }
+  console.log('✅ Departments created successfully');
 
   // 1. Create Users for all 4 Roles
   const studentKetan = await prisma.user.create({
@@ -26,6 +50,7 @@ async function main() {
       role: Role.STUDENT,
       regNo: '12204598',
       department: 'School of Computer Science & Engineering',
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       designation: 'B.Tech CSE (3rd Year)',
       phone: '+91 98765 43210',
       avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
@@ -40,6 +65,7 @@ async function main() {
       role: Role.STUDENT,
       regNo: '12108742',
       department: 'School of Electronics & Electrical Engineering',
+      departmentId: deptMap['School of Electronics & Electrical Engineering'].id,
       designation: 'B.Tech ECE (4th Year)',
       phone: '+91 98765 43211',
       avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
@@ -54,6 +80,7 @@ async function main() {
       role: Role.FACULTY,
       regNo: 'UID-23841',
       department: 'School of Computer Science & Engineering',
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       designation: 'Associate Professor & AI Lab Head',
       phone: '+91 98765 43212',
       avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80',
@@ -68,6 +95,7 @@ async function main() {
       role: Role.DEPARTMENT_APPROVER,
       regNo: 'UID-10928',
       department: 'School of Computer Science & Engineering',
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       designation: 'HOD & Department Resource In-charge',
       phone: '+91 98765 43213',
       avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80',
@@ -82,48 +110,66 @@ async function main() {
       role: Role.ADMINISTRATOR,
       regNo: 'ADM-0042',
       department: 'Campus Infrastructure & Estate Management',
+      departmentId: deptMap['Campus Infrastructure & Estate Management'].id,
       designation: 'Chief Facilities & Asset Administrator',
       phone: '+91 98765 43214',
       avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80',
     },
   });
 
-  console.log('✅ Users created successfully (4 roles)');
+  // Assign Prof. Meenakshi as primary approver for School of CSE
+  await prisma.approverAssignment.create({
+    data: {
+      userId: approverMeenakshi.id,
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
+      isPrimary: true,
+    },
+  });
+
+  console.log('✅ Users and Approver Assignments created successfully (4 roles)');
 
   // 2. Department Policies
   await prisma.departmentPolicy.createMany({
     data: [
       {
         department: 'School of Computer Science & Engineering',
+        departmentId: deptMap['School of Computer Science & Engineering'].id,
         maxAdvanceDays: 14,
         maxBookingHoursPerWeek: 16,
         requireFacultyEndorsement: false,
         autoReleaseMinutes: 15,
         autoApproveStudentHours: 2,
+        approvalSlaHours: 24,
       },
       {
         department: 'School of Electronics & Electrical Engineering',
+        departmentId: deptMap['School of Electronics & Electrical Engineering'].id,
         maxAdvanceDays: 10,
         maxBookingHoursPerWeek: 12,
         requireFacultyEndorsement: true,
         autoReleaseMinutes: 15,
         autoApproveStudentHours: 2,
+        approvalSlaHours: 24,
       },
       {
         department: 'Sports Complex & Athletics',
+        departmentId: deptMap['Sports Complex & Athletics'].id,
         maxAdvanceDays: 7,
         maxBookingHoursPerWeek: 10,
         requireFacultyEndorsement: false,
         autoReleaseMinutes: 10,
         autoApproveStudentHours: 2,
+        approvalSlaHours: 24,
       },
       {
         department: 'Estate & Transport Office',
+        departmentId: deptMap['Estate & Transport Office'].id,
         maxAdvanceDays: 30,
         maxBookingHoursPerWeek: 40,
         requireFacultyEndorsement: true,
         autoReleaseMinutes: 30,
         autoApproveStudentHours: 0,
+        approvalSlaHours: 24,
       },
     ],
   });
@@ -358,7 +404,12 @@ async function main() {
 
   const createdResources: Record<string, any> = {};
   for (const item of resourcesData) {
-    const res = await prisma.resource.create({ data: item });
+    const res = await prisma.resource.create({
+      data: {
+        ...item,
+        departmentId: deptMap[item.department]?.id || null,
+      },
+    });
     createdResources[item.code] = res;
   }
   console.log(`✅ Created ${resourcesData.length} Campus Resources`);
@@ -443,6 +494,7 @@ async function main() {
       bookingNumber: 'LPU-2026-4091',
       userId: studentKetan.id,
       resourceId: createdResources['CSE-CR-204'].id,
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       startTime: today,
       endTime: todayEnd,
       purpose: 'Class Discussion on DAA Project & Group Allocation',
@@ -452,6 +504,10 @@ async function main() {
       status: BookingStatus.CONFIRMED,
       checkInToken: '739201',
       releaseDeadline: new Date(today.getTime() + 15 * 60000), // 15 mins after start
+      submittedAt: new Date(today.getTime() - 86400000),
+      decidedAt: new Date(today.getTime() - 86400000 + 1800000),
+      decidedById: approverMeenakshi.id,
+      approvalNotes: 'Approved by Prof. Meenakshi Sundaram for student team project.',
     },
   });
 
@@ -466,6 +522,7 @@ async function main() {
       bookingNumber: 'LPU-2026-4108',
       userId: studentKetan.id,
       resourceId: createdResources['CSE-LAB-03'].id,
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       startTime: nextThu,
       endTime: nextThuEnd,
       purpose: 'Project Work - Distributed Systems Benchmark Testing',
@@ -475,6 +532,10 @@ async function main() {
       status: BookingStatus.CONFIRMED,
       checkInToken: '582014',
       releaseDeadline: new Date(nextThu.getTime() + 15 * 60000),
+      submittedAt: new Date(Date.now() - 3600000 * 12),
+      decidedAt: new Date(Date.now() - 3600000 * 11),
+      decidedById: approverMeenakshi.id,
+      approvalNotes: 'Auto-approved per department laboratory policy.',
     },
   });
 
@@ -489,6 +550,7 @@ async function main() {
       bookingNumber: 'LPU-2026-4182',
       userId: studentKetan.id,
       resourceId: createdResources['SAC-SEM-02'].id,
+      departmentId: deptMap['Student Welfare & Cultural Affairs'].id,
       startTime: nextMon,
       endTime: nextMonEnd,
       purpose: 'Club Event: Google Developer Student Club Annual Tech Talk & Ideathon',
@@ -496,7 +558,9 @@ async function main() {
       expectedAttendance: 110,
       priority: PriorityLevel.HIGH,
       status: BookingStatus.PENDING,
-      approvalNotes: 'Pending approval by School of CSE Resource Approver',
+      submittedAt: new Date(Date.now() - 3600000 * 4),
+      slaDueAt: new Date(Date.now() + 3600000 * 20),
+      approvalNotes: 'Pending approval by Resource Approver',
     },
   });
 
@@ -506,6 +570,7 @@ async function main() {
       bookingNumber: 'LPU-2026-4219',
       userId: facultyArvind.id,
       resourceId: createdResources['MAIN-SEM-01'].id,
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       startTime: new Date(Date.now() + 86400000 * 2),
       endTime: new Date(Date.now() + 86400000 * 2 + 7200000),
       purpose: 'Guest Lecture: Scalable Microservices Architecture with Industry Expert',
@@ -513,6 +578,8 @@ async function main() {
       expectedAttendance: 95,
       priority: PriorityLevel.HIGH,
       status: BookingStatus.PENDING,
+      submittedAt: new Date(Date.now() - 3600000 * 2),
+      slaDueAt: new Date(Date.now() + 3600000 * 22),
     },
   });
 
@@ -521,6 +588,7 @@ async function main() {
       bookingNumber: 'LPU-2026-4255',
       userId: studentAastha.id,
       resourceId: createdResources['SPT-BDM-01'].id,
+      departmentId: deptMap['Sports Complex & Athletics'].id,
       startTime: new Date(Date.now() + 86400000 * 1),
       endTime: new Date(Date.now() + 86400000 * 1 + 3600000 * 2),
       purpose: 'Inter-School Badminton Tournament Trials',
@@ -528,6 +596,8 @@ async function main() {
       expectedAttendance: 12,
       priority: PriorityLevel.NORMAL,
       status: BookingStatus.PENDING,
+      submittedAt: new Date(Date.now() - 3600000 * 1),
+      slaDueAt: new Date(Date.now() + 3600000 * 23),
     },
   });
 
@@ -537,6 +607,7 @@ async function main() {
       bookingNumber: 'LPU-2026-3891',
       userId: studentKetan.id,
       resourceId: createdResources['CSE-CR-301'].id,
+      departmentId: deptMap['School of Computer Science & Engineering'].id,
       startTime: new Date(Date.now() - 86400000 * 2),
       endTime: new Date(Date.now() - 86400000 * 2 + 7200000),
       purpose: 'Hackathon Practice Session',
@@ -546,6 +617,9 @@ async function main() {
       status: BookingStatus.COMPLETED,
       checkInToken: '120934',
       checkedInAt: new Date(Date.now() - 86400000 * 2 + 300000),
+      submittedAt: new Date(Date.now() - 86400000 * 3),
+      decidedAt: new Date(Date.now() - 86400000 * 3 + 1200000),
+      decidedById: approverMeenakshi.id,
     },
   });
 
@@ -554,6 +628,7 @@ async function main() {
       bookingNumber: 'LPU-2026-3810',
       userId: studentAastha.id,
       resourceId: createdResources['ADM-MR-A1'].id,
+      departmentId: deptMap['Campus Infrastructure & Estate Management'].id,
       startTime: new Date(Date.now() - 86400000 * 3),
       endTime: new Date(Date.now() - 86400000 * 3 + 3600000),
       purpose: 'Core Team Planning',
@@ -562,10 +637,32 @@ async function main() {
       priority: PriorityLevel.NORMAL,
       status: BookingStatus.NO_SHOW,
       approvalNotes: 'Auto-released by system after 15 minute check-in window expired.',
+      submittedAt: new Date(Date.now() - 86400000 * 4),
     },
   });
 
-  console.log('✅ Realistic Bookings created');
+  // Seed sample BookingComment and ApprovalDecision to verify P1 models
+  await prisma.bookingComment.create({
+    data: {
+      bookingId: booking3.id,
+      authorId: studentKetan.id,
+      body: 'Arranging 2 industry speakers from Bangalore for this session. Audio setup requested.',
+      isInternal: false,
+    },
+  });
+
+  await prisma.approvalDecision.create({
+    data: {
+      bookingId: booking1.id,
+      approverId: approverMeenakshi.id,
+      action: 'APPROVE',
+      reason: 'Approved for scheduled group project session.',
+      before: { status: 'PENDING' },
+      after: { status: 'CONFIRMED' },
+    },
+  });
+
+  console.log('✅ Realistic Bookings, Comments and Approval Decisions created');
 
   // 6. User Notifications
   await prisma.notification.createMany({

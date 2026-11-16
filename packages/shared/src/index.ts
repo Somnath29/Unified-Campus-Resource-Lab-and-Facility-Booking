@@ -14,6 +14,7 @@ export type ResourceCategory =
 // Booking Statuses
 export type BookingStatus = 
   | 'PENDING' 
+  | 'NEEDS_INFO'
   | 'APPROVED' 
   | 'CONFIRMED' 
   | 'REJECTED' 
@@ -36,6 +37,65 @@ export type ActivityType =
 // Priority Levels
 export type PriorityLevel = 'NORMAL' | 'HIGH' | 'URGENT';
 
+// Department Interface
+export interface DepartmentDTO {
+  id: string;
+  code: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Approver Assignment Interface
+export interface ApproverAssignmentDTO {
+  id: string;
+  userId: string;
+  departmentId: string;
+  isPrimary: boolean;
+  createdAt: string;
+  user?: UserDTO;
+  department?: DepartmentDTO;
+}
+
+// Booking Comment Interface
+export interface BookingCommentDTO {
+  id: string;
+  bookingId: string;
+  authorId: string;
+  body: string;
+  isInternal: boolean;
+  createdAt: string;
+  author?: UserDTO;
+}
+
+// Delegation Interface
+export interface DelegationDTO {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  departmentId: string;
+  startsAt: string;
+  endsAt: string;
+  revokedAt?: string | null;
+  createdAt: string;
+  fromUser?: UserDTO;
+  toUser?: UserDTO;
+  department?: DepartmentDTO;
+}
+
+// Approval Decision Interface
+export interface ApprovalDecisionDTO {
+  id: string;
+  bookingId: string;
+  approverId: string;
+  action: 'APPROVE' | 'REJECT' | 'MODIFY' | 'REQUEST_INFO' | string;
+  reason?: string | null;
+  before?: any;
+  after?: any;
+  createdAt: string;
+  approver?: UserDTO;
+}
+
 // User Interface
 export interface UserDTO {
   id: string;
@@ -44,6 +104,7 @@ export interface UserDTO {
   role: UserRole;
   regNo?: string | null;
   department: string;
+  departmentId?: string | null;
   designation?: string | null;
   phone?: string | null;
   avatarUrl?: string | null;
@@ -57,6 +118,7 @@ export interface ResourceDTO {
   name: string;
   category: ResourceCategory;
   department: string;
+  departmentId?: string | null;
   building: string;
   floor?: string | null;
   capacity: number;
@@ -91,6 +153,13 @@ export interface BookingDTO {
   approvalNotes?: string | null;
   rejectionReason?: string | null;
   departmentId?: string | null;
+  submittedAt?: string;
+  decidedAt?: string | null;
+  decidedById?: string | null;
+  decidedBy?: UserDTO | null;
+  slaDueAt?: string | null;
+  comments?: BookingCommentDTO[];
+  approvalDecisions?: ApprovalDecisionDTO[];
   createdAt: string;
   updatedAt: string;
 }
@@ -126,12 +195,15 @@ export interface NotificationDTO {
 export interface DepartmentPolicyDTO {
   id: string;
   department: string;
+  departmentId?: string | null;
   maxAdvanceDays: number;
   maxBookingHoursPerWeek: number;
   requireFacultyEndorsement: boolean;
   autoReleaseMinutes: number;
   autoApproveStudentHours: number; // e.g. bookings under 2 hrs auto approve if score is good
   blackoutPeriods?: string | null;
+  approvalSlaHours?: number;
+  escalateToRole?: UserRole | null;
 }
 
 // Auth Response
@@ -159,5 +231,46 @@ export interface AdminAnalyticsDTO {
   weeklyTrends: { day: string; bookings: number; checkIns: number; noShows: number }[];
   departmentBreakdown: { department: string; bookings: number; utilization: number }[];
   topResources: { name: string; category: string; bookingsCount: number; utilization: number }[];
+}
+
+// Approval Queue Types (P2)
+export interface RequesterSummaryDTO {
+  role: UserRole;
+  recentNoShowCount: number;
+  hoursUsedThisWeek: number;
+}
+
+export interface SlaInfoDTO {
+  slaDueAt?: string | null;
+  remainingMs?: number | null;
+  status: 'ON_TIME' | 'DUE_SOON' | 'OVERDUE';
+}
+
+export interface CompetingIssueDTO {
+  hasCompetingPending: boolean;
+  competingCount: number;
+  competingBookingNumbers: string[];
+}
+
+export interface EnrichedApprovalItemDTO extends BookingDTO {
+  requesterSummary: RequesterSummaryDTO;
+  sla: SlaInfoDTO;
+  issues: CompetingIssueDTO;
+}
+
+export interface ApprovalQueueResponseDTO {
+  requests: EnrichedApprovalItemDTO[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface ApprovalStatsDTO {
+  pending: number;
+  overdue: number;
+  approvedToday: number;
+  averageDecisionTimeMinutes: number;
+  needsInfoCount: number;
 }
 
