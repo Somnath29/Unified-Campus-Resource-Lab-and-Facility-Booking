@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { BookingStatus, ActivityType, PriorityLevel, Role } from '@prisma/client';
+import crypto from 'crypto';
 
 const router = Router();
 

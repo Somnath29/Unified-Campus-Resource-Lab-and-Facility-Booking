@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { BookingStatus, Role, ResourceCategory, PriorityLevel } from '@prisma/client';
 import { AuthenticatedUser } from '../middleware/auth';
+import crypto from 'crypto';
 
 export class ApprovalError extends Error {
   statusCode: number;
@@ -205,33 +206,52 @@ export async function processApprovalAction(params: ApprovalActionParams) {
       );
     }
 
-    // 3d. Idempotency Check: Repeating the same action returns previous result without duplicate side-effects
-    const lastDecision = await tx.approvalDecision.findFirst({
-      where: {
-        bookingId: booking.id,
-        approverId: approver.id,
-        action,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (
-      lastDecision &&
-      ((action === 'APPROVE' && booking.status === BookingStatus.CONFIRMED) ||
-        (action === 'REJECT' && booking.status === BookingStatus.REJECTED) ||
-        (action === 'REQUEST_INFO' && booking.status === BookingStatus.NEEDS_INFO) ||
-        (action === 'MODIFY' && booking.status === BookingStatus.CONFIRMED))
-    ) {
-      return {
-        booking,
-        message: `Action ${action} already applied previously (idempotent response).`,
-        decision: lastDecision,
-        isIdempotent: true,
-      };
-    }
-
-    // 3e. Status Check: Must be PENDING to proceed
+    // 3d. Idempotency Check & Status Gate
     if (booking.status !== BookingStatus.PENDING) {
+      // Booking has already received a decision. Check if this is an EXACT idempotent retry by the same approver.
+      const lastDecision = await tx.approvalDecision.findFirst({
+        where: {
+          bookingId: booking.id,
+          approverId: approver.id,
+          action,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (lastDecision) {
+        let isMatch = false;
+
+        if (action === 'APPROVE' && booking.status === BookingStatus.CONFIRMED) {
+          isMatch = true;
+        } else if (action === 'REJECT' && booking.status === BookingStatus.REJECTED) {
+          const effectiveReason = (reason || notes || '').trim();
+          isMatch = !effectiveReason || lastDecision.reason === effectiveReason;
+        } else if (action === 'REQUEST_INFO' && booking.status === BookingStatus.NEEDS_INFO) {
+          const effectiveQuestion = (question || notes || reason || '').trim();
+          isMatch = !effectiveQuestion || lastDecision.reason === effectiveQuestion;
+        } else if (action === 'MODIFY' && booking.status === BookingStatus.CONFIRMED) {
+          const targetResId = alternateResourceId || booking.resourceId;
+          const targetStart = newStartTime ? new Date(newStartTime).getTime() : booking.startTime.getTime();
+          const targetEnd = newEndTime ? new Date(newEndTime).getTime() : booking.endTime.getTime();
+
+          const resMatch = booking.resourceId === targetResId;
+          const startMatch = booking.startTime.getTime() === targetStart;
+          const endMatch = booking.endTime.getTime() === targetEnd;
+
+          isMatch = resMatch && startMatch && endMatch;
+        }
+
+        if (isMatch) {
+          return {
+            booking,
+            message: `Action ${action} already applied previously (idempotent response).`,
+            decision: lastDecision,
+            isIdempotent: true,
+          };
+        }
+      }
+
+      // If not an exact idempotent replay, non-PENDING status cannot receive a new decision
       throw new ApprovalError(
         `Slot status conflict: Booking #${booking.bookingNumber} is in status ${booking.status}, expected PENDING.`,
         409
@@ -247,7 +267,7 @@ export async function processApprovalAction(params: ApprovalActionParams) {
       endTime: booking.endTime.toISOString(),
     };
 
-    // 3f. Determine Policy and autoReleaseMinutes
+    // 3e. Determine Policy and autoReleaseMinutes (safely handling 0)
     const departmentPolicy = await tx.departmentPolicy.findFirst({
       where: {
         OR: [
@@ -256,13 +276,16 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         ],
       },
     });
-    const autoReleaseMinutes = departmentPolicy?.autoReleaseMinutes || 15;
+    const autoReleaseMinutes =
+      departmentPolicy?.autoReleaseMinutes !== undefined && departmentPolicy?.autoReleaseMinutes !== null
+        ? departmentPolicy.autoReleaseMinutes
+        : 15;
 
     // =========================================================================
     // ACTION: APPROVE
     // =========================================================================
     if (action === 'APPROVE') {
-      // Re-verify that target room is not in maintenance
+      // 1. Re-verify that target room is not in maintenance
       if (booking.resource.isUnderMaintenance) {
         throw new ApprovalError(
           `Resource ${booking.resource.name} is currently under maintenance: ${booking.resource.maintenanceReason || 'Scheduled upkeep'}.`,
@@ -270,7 +293,45 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         );
       }
 
-      // Re-verify no overlapping confirmed/checked-in bookings exist
+      // 2. Validate capacity
+      if (booking.expectedAttendance > booking.resource.capacity) {
+        throw new ApprovalError(
+          `Expected attendance (${booking.expectedAttendance}) exceeds capacity (${booking.resource.capacity}) of ${booking.resource.name}.`,
+          400
+        );
+      }
+
+      // 3. Validate operating hours
+      if (!isWithinOperatingHours(booking.resource.operatingHours, booking.startTime, booking.endTime)) {
+        throw new ApprovalError(
+          `Booking time falls outside operating hours (${booking.resource.operatingHours}) for ${booking.resource.name}.`,
+          400
+        );
+      }
+
+      // 4. Validate academic timetable clashes
+      const dayOfWeek = booking.startTime.getDay();
+      const startHM = `${String(booking.startTime.getHours()).padStart(2, '0')}:${String(booking.startTime.getMinutes()).padStart(2, '0')}`;
+      const endHM = `${String(booking.endTime.getHours()).padStart(2, '0')}:${String(booking.endTime.getMinutes()).padStart(2, '0')}`;
+
+      const timetableClash = await tx.timetableEntry.findFirst({
+        where: {
+          resourceId: booking.resourceId,
+          dayOfWeek,
+          startTime: { lt: endHM },
+          endTime: { gt: startHM },
+        },
+      });
+
+      if (timetableClash) {
+        throw new ApprovalError(
+          `Academic timetable clash: ${booking.resource.name} has scheduled class ${timetableClash.courseCode} (${timetableClash.courseName}) at this time.`,
+          409,
+          { classClash: timetableClash }
+        );
+      }
+
+      // 5. Re-verify no overlapping confirmed/checked-in bookings exist
       const conflictingBooking = await tx.booking.findFirst({
         where: {
           resourceId: booking.resourceId,
@@ -289,7 +350,8 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         );
       }
 
-      const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate cryptographically secure 6-digit numeric check-in token
+      const checkInToken = crypto.randomInt(100000, 1000000).toString();
       const releaseDeadline = new Date(booking.startTime.getTime() + autoReleaseMinutes * 60000);
       const approvalNotes = notes || reason || `Approved by ${approver.name} (${approver.designation || approver.role})`;
 
@@ -302,6 +364,10 @@ export async function processApprovalAction(params: ApprovalActionParams) {
           releaseDeadline,
           decidedAt: now,
           decidedById: approver.id,
+        },
+        include: {
+          resource: true,
+          user: true,
         },
       });
 
@@ -497,6 +563,18 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         throw new ApprovalError('Selected alternative resource does not exist.', 404);
       }
 
+      // 0. Target Department Authorization Check
+      if (authorizedDeptIds !== null) {
+        const targetDeptId = targetResource.departmentId;
+        const isAuthorized = targetDeptId ? authorizedDeptIds.includes(targetDeptId) : false;
+        if (!isAuthorized) {
+          throw new ApprovalError(
+            `Forbidden: You do not have approval permissions for target resource ${targetResource.name} in department ${targetResource.department}.`,
+            403
+          );
+        }
+      }
+
       // 1. Maintenance Check
       if (targetResource.isUnderMaintenance) {
         throw new ApprovalError(
@@ -562,7 +640,7 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         );
       }
 
-      // Re-calculate release deadline with target department's policy
+      // Re-calculate release deadline with target department's policy (safely handling 0)
       const targetDeptPolicy = await tx.departmentPolicy.findFirst({
         where: {
           OR: [
@@ -571,9 +649,12 @@ export async function processApprovalAction(params: ApprovalActionParams) {
           ],
         },
       });
-      const targetAutoReleaseMinutes = targetDeptPolicy?.autoReleaseMinutes || 15;
+      const targetAutoReleaseMinutes =
+        targetDeptPolicy?.autoReleaseMinutes !== undefined && targetDeptPolicy?.autoReleaseMinutes !== null
+          ? targetDeptPolicy.autoReleaseMinutes
+          : 15;
 
-      const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
+      const checkInToken = crypto.randomInt(100000, 1000000).toString();
       const releaseDeadline = new Date(targetStart.getTime() + targetAutoReleaseMinutes * 60000);
       const modificationNotes =
         notes || reason || `Modified and approved by ${approver.name}. Assigned to ${targetResource.name}.`;
@@ -591,6 +672,10 @@ export async function processApprovalAction(params: ApprovalActionParams) {
           releaseDeadline,
           decidedAt: now,
           decidedById: approver.id,
+        },
+        include: {
+          resource: true,
+          user: true,
         },
       });
 

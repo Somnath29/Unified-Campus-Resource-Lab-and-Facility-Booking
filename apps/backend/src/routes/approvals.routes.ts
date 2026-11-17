@@ -8,12 +8,15 @@ import {
   getAuthorizedDepartmentIds,
 } from '../services/approvalService';
 
+import { AuthenticatedUser } from '../middleware/auth';
+
 const router = Router();
 
 /**
- * Builds Prisma where-clause conditions to enforce department authorization scoping.
+ * Builds Prisma where-clause conditions to enforce department authorization scoping
+ * and prevents approver self-reservations from appearing in the actionable queue.
  */
-function buildScopeFilter(authorizedDeptIds: string[] | null) {
+function buildScopeFilter(authorizedDeptIds: string[] | null, approver?: AuthenticatedUser) {
   if (authorizedDeptIds === null) {
     return {}; // Admin has no department scope restriction
   }
@@ -22,12 +25,18 @@ function buildScopeFilter(authorizedDeptIds: string[] | null) {
     return { id: '__no_access__' };
   }
 
-  return {
+  const filter: any = {
     OR: [
       { departmentId: { in: authorizedDeptIds } },
       { resource: { departmentId: { in: authorizedDeptIds } } },
     ],
   };
+
+  if (approver && approver.role === Role.DEPARTMENT_APPROVER) {
+    filter.userId = { not: approver.id };
+  }
+
+  return filter;
 }
 
 /**
@@ -130,7 +139,7 @@ router.get(
     try {
       const approver = req.user!;
       const authorizedDeptIds = await getAuthorizedDepartmentIds(approver);
-      const scopeFilter = buildScopeFilter(authorizedDeptIds);
+      const scopeFilter = buildScopeFilter(authorizedDeptIds, approver);
 
       const now = new Date();
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -223,7 +232,7 @@ router.get(
         });
       }
 
-      const scopeFilter = buildScopeFilter(authorizedDeptIds);
+      const scopeFilter = buildScopeFilter(authorizedDeptIds, approver);
 
       // Parse Query Parameters
       const {
