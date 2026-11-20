@@ -157,7 +157,8 @@ export async function processApprovalAction(params: ApprovalActionParams) {
   const authorizedDeptIds = await getAuthorizedDepartmentIds(approver);
 
   // 3. Execute Decision in an Interactive Transaction with Row Lock
-  return await prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     // 3a. Acquire Row Lock using SELECT ... FOR UPDATE
     const lockedRows = await tx.$queryRaw<any[]>`
       SELECT id, status, "userId", "resourceId", "startTime", "endTime", "departmentId", "bookingNumber"
@@ -285,6 +286,11 @@ export async function processApprovalAction(params: ApprovalActionParams) {
     // ACTION: APPROVE
     // =========================================================================
     if (action === 'APPROVE') {
+      // Acquire resource row lock to serialize concurrent approval decisions and prevent overlapping slot confirmations
+      await tx.$queryRaw`
+        SELECT id FROM "Resource" WHERE id = ${booking.resourceId} FOR UPDATE
+      `;
+
       // 1. Re-verify that target room is not in maintenance
       if (booking.resource.isUnderMaintenance) {
         throw new ApprovalError(
@@ -429,6 +435,10 @@ export async function processApprovalAction(params: ApprovalActionParams) {
           decidedAt: now,
           decidedById: approver.id,
         },
+        include: {
+          resource: true,
+          user: true,
+        },
       });
 
       const decision = await tx.approvalDecision.create({
@@ -485,6 +495,10 @@ export async function processApprovalAction(params: ApprovalActionParams) {
         data: {
           status: BookingStatus.NEEDS_INFO,
           approvalNotes: `Information requested: ${questionText}`,
+        },
+        include: {
+          resource: true,
+          user: true,
         },
       });
 
@@ -549,8 +563,16 @@ export async function processApprovalAction(params: ApprovalActionParams) {
       const targetStart = newStartTime ? new Date(newStartTime) : booking.startTime;
       const targetEnd = newEndTime ? new Date(newEndTime) : booking.endTime;
 
+      if (isNaN(targetStart.getTime()) || isNaN(targetEnd.getTime())) {
+        throw new ApprovalError('Invalid start time or end time format.', 400);
+      }
+
       if (targetEnd <= targetStart) {
         throw new ApprovalError('End time must be after start time.', 400);
+      }
+
+      if (targetStart < now) {
+        throw new ApprovalError('Cannot reschedule a reservation into the past.', 400);
       }
 
       // Fetch target resource
@@ -562,6 +584,11 @@ export async function processApprovalAction(params: ApprovalActionParams) {
       if (!targetResource) {
         throw new ApprovalError('Selected alternative resource does not exist.', 404);
       }
+
+      // Acquire target resource row lock to serialize concurrent modification/approval decisions
+      await tx.$queryRaw`
+        SELECT id FROM "Resource" WHERE id = ${targetResourceId} FOR UPDATE
+      `;
 
       // 0. Target Department Authorization Check
       if (authorizedDeptIds !== null) {
@@ -728,4 +755,25 @@ export async function processApprovalAction(params: ApprovalActionParams) {
 
     throw new ApprovalError('Unhandled approval action.', 400);
   });
+  } catch (err: any) {
+    if (err instanceof ApprovalError) {
+      throw err;
+    }
+    const errStr = String(err.message || '') + ' ' + String(err.code || '');
+    if (
+      err.code === '23P01' ||
+      errStr.includes('23P01') ||
+      errStr.includes('exclusion') ||
+      errStr.includes('no_overlapping_confirmed_bookings') ||
+      err.code === 'P2002' ||
+      err.code === 'P2034'
+    ) {
+      throw new ApprovalError(
+        'Slot conflict: A concurrent decision has already confirmed this resource for the requested time window.',
+        409,
+        { originalError: err.message }
+      );
+    }
+    throw err;
+  }
 }

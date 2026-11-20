@@ -221,11 +221,14 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const bookingNumber = `LPU-${new Date().getFullYear()}-${randomSuffix}`;
 
-    // 6-digit numeric check-in token
-    const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
+    // 6-digit cryptographically secure numeric check-in token
+    const checkInToken = crypto.randomInt(100000, 1000000).toString();
 
-    // Release deadline: 15 minutes after start time
-    const releaseDeadline = new Date(start.getTime() + (policy?.autoReleaseMinutes || 15) * 60000);
+    // Release deadline based on department policy (respecting 0)
+    const autoReleaseMins = policy?.autoReleaseMinutes !== undefined && policy?.autoReleaseMinutes !== null
+      ? policy.autoReleaseMinutes
+      : 15;
+    const releaseDeadline = new Date(start.getTime() + autoReleaseMins * 60000);
 
     const booking = await prisma.booking.create({
       data: {
