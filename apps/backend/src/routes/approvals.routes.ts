@@ -108,6 +108,19 @@ async function enrichBooking(booking: any) {
     select: { id: true, bookingNumber: true, expectedAttendance: true, priority: true },
   });
 
+  // 4. Department Policy
+  let policy = null;
+  if (booking.departmentId) {
+    policy = await prisma.departmentPolicy.findFirst({
+      where: { departmentId: booking.departmentId },
+    });
+  }
+  if (!policy && booking.resource?.department) {
+    policy = await prisma.departmentPolicy.findFirst({
+      where: { department: booking.resource.department },
+    });
+  }
+
   return {
     ...booking,
     requesterSummary: {
@@ -125,6 +138,7 @@ async function enrichBooking(booking: any) {
       competingCount: competingBookings.length,
       competingBookings,
     },
+    policy,
   };
 }
 
@@ -493,6 +507,45 @@ router.post(
       }
       console.error('Error processing approval action:', err);
       return res.status(500).json({ error: 'Failed to process approval action.' });
+    }
+  }
+);
+
+// ============================================================================
+// 5. POST /api/approvals/:id/comments - Add Comment / Internal Note
+// ============================================================================
+router.post(
+  '/:id/comments',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { body, isInternal = false } = req.body;
+      const approver = req.user!;
+
+      if (!body || typeof body !== 'string' || body.trim().length === 0) {
+        return res.status(400).json({ error: 'Comment body cannot be empty.' });
+      }
+
+      const comment = await prisma.bookingComment.create({
+        data: {
+          bookingId: id,
+          authorId: approver.id,
+          body: body.trim(),
+          isInternal: Boolean(isInternal),
+        },
+        include: {
+          author: {
+            select: { id: true, name: true, role: true, avatarUrl: true },
+          },
+        },
+      });
+
+      return res.status(201).json({ comment });
+    } catch (err) {
+      console.error('Error posting comment:', err);
+      return res.status(500).json({ error: 'Failed to post comment.' });
     }
   }
 );

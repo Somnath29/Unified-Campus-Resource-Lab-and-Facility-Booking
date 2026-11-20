@@ -82,11 +82,26 @@ export const api = {
     cancel: (id: string, reason?: string) => apiRequest(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
   },
   approvals: {
-    list: (status?: string) => {
-      const qs = status ? `?status=${status}` : '';
-      return apiRequest(`/approvals${qs}`);
+    list: (params?: Record<string, any> | string) => {
+      let qs = '';
+      if (typeof params === 'string') {
+        qs = params ? `?status=${params}` : '';
+      } else if (params) {
+        const cleanParams: Record<string, string> = {};
+        for (const [k, v] of Object.entries(params)) {
+          if (v !== undefined && v !== null && v !== '') {
+            cleanParams[k] = String(v);
+          }
+        }
+        const searchParams = new URLSearchParams(cleanParams);
+        qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+      }
+      return apiRequest<any>(`/approvals${qs}`);
     },
-    takeAction: (id: string, body: any) => apiRequest(`/approvals/${id}/action`, { method: 'POST', body: JSON.stringify(body) }),
+    getStats: () => apiRequest<any>('/approvals/stats'),
+    getById: (id: string) => apiRequest<any>(`/approvals/${id}`),
+    takeAction: (id: string, body: any) => apiRequest<any>(`/approvals/${id}/action`, { method: 'POST', body: JSON.stringify(body) }),
+    addComment: (id: string, body: { body: string; isInternal?: boolean }) => apiRequest<any>(`/approvals/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
   },
   checkin: {
     verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),
