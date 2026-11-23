@@ -4,7 +4,12 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('🌱 Seeding LPU Campus Database...');
+  if (process.env.NODE_ENV === 'production') {
+    console.log('⚠️ Skipping development seed in production environment.');
+    process.exit(0);
+  }
+
+  console.log('🌱 Seeding LPU Campus Database (Development Mode)...');
 
   // Clean existing records in reverse dependency order
   await prisma.auditLog.deleteMany({});

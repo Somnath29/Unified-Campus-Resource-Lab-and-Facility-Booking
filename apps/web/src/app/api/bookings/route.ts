@@ -176,9 +176,10 @@ export const POST = withErrorHandling(async (request: Request) => {
     initialStatus = BookingStatus.CONFIRMED;
   }
 
-  // Generate unique booking number
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const bookingNumber = `LPU-${new Date().getFullYear()}-${randomSuffix}`;
+  // Generate unique sequential booking number using Postgres sequence (format: LPU-YYYY-000123)
+  const seqResult = await prisma.$queryRaw<{ nextval: bigint }[]>`SELECT nextval('booking_number_seq')::bigint as nextval`;
+  const seqNum = String(seqResult[0]?.nextval || 1).padStart(6, '0');
+  const bookingNumber = `LPU-${new Date().getFullYear()}-${seqNum}`;
 
   // 6-digit numeric check-in token
   const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();

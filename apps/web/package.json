@@ -9,13 +9,19 @@
     "lint": "next lint",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
+    "db:seed:prod": "tsx prisma/seed.prod.ts",
     "db:studio": "prisma studio"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
+  "browserslist": [
+    "defaults",
+    "not IE 11"
+  ],
   "dependencies": {
     "@lpu/shared": "*",
     "@prisma/client": "^5.22.0",
@@ -44,4 +50,3 @@
     "typescript": "^5.4.5"
   }
 }
-

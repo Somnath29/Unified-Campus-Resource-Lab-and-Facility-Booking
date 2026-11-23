@@ -54,21 +54,23 @@ enum PriorityLevel {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  passwordHash  String
-  name          String
-  role          Role           @default(STUDENT)
-  regNo         String?
-  department    String
-  designation   String?
-  phone         String?
-  avatarUrl     String?
-  bookings      Booking[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id                String         @id @default(uuid())
+  email             String         @unique
+  passwordHash      String
+  name              String
+  role              Role           @default(STUDENT)
+  regNo             String?
+  department        String
+  designation       String?
+  phone             String?
+  avatarUrl         String?
+  isActive          Boolean        @default(true)
+  passwordChangedAt DateTime?
+  bookings          Booking[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 }
 
 model Resource {
@@ -87,6 +89,7 @@ model Resource {
   isUnderMaintenance Boolean          @default(false)
   maintenanceReason  String?
   operatingHours     String           @default("08:00 AM - 08:00 PM")
+  deletedAt          DateTime?
   bookings           Booking[]
   timetableEntries   TimetableEntry[]
   createdAt          DateTime         @default(now())
@@ -99,7 +102,7 @@ model Booking {
   userId             String
   user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   resourceId         String
-  resource           Resource      @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  resource           Resource      @relation(fields: [resourceId], references: [id], onDelete: Restrict)
   startTime          DateTime
   endTime            DateTime
   purpose            String
@@ -117,6 +120,8 @@ model Booking {
   updatedAt          DateTime      @updatedAt
 
   @@index([resourceId, startTime, endTime])
+  @@index([userId])
+  @@index([status, startTime])
   @@index([status])
 }
 
@@ -146,6 +151,8 @@ model Notification {
   read      Boolean  @default(false)
   link      String?
   createdAt DateTime @default(now())
+
+  @@index([userId, read])
 }
 
 model DepartmentPolicy {
@@ -169,5 +176,6 @@ model AuditLog {
   entityId   String
   details    String?
   createdAt  DateTime @default(now())
-}
 
+  @@index([createdAt])
+}
