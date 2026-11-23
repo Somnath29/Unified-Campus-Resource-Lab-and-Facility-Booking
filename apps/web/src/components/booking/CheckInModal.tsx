@@ -54,22 +54,9 @@ export function CheckInModal({
     }
   };
 
-  const handleSimulateAutoRelease = async () => {
-    setIsVerifying(true);
-    setErrorMsg(null);
-    try {
-      const res = await api.checkin.autoReleaseScan();
-      if (res.releasedCount > 0) {
-        setSuccessMsg(`Auto-release scanned: ${res.releasedCount} overdue reservations released.`);
-      } else {
-        setSuccessMsg('Auto-release scanner checked all reservations. No expired reservations found at this second.');
-      }
-      if (onCheckInUpdated) onCheckInUpdated();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to trigger scan.');
-    } finally {
-      setIsVerifying(false);
-    }
+  const handleSimulateAutoRelease = () => {
+    setSuccessMsg('Auto-release scanner is active via serverless cron job (/api/cron/auto-release).');
+    if (onCheckInUpdated) onCheckInUpdated();
   };
 
   return (

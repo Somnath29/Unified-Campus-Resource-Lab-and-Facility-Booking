@@ -1,5 +1,3 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
-
 export function getStoredToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('lpu_token');
@@ -31,10 +29,13 @@ export async function apiRequest<T = any>(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  // Always use relative /api endpoint with credentials included
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = path.startsWith('/api') ? path : `/api${path}`;
 
   const response = await fetch(url, {
     ...options,
+    credentials: 'include',
     headers,
   });
 
@@ -54,6 +55,7 @@ export const api = {
     register: (body: any) => apiRequest('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
     demoLogin: (role: string) => apiRequest('/auth/demo-login', { method: 'POST', body: JSON.stringify({ role }) }),
     me: () => apiRequest('/auth/me'),
+    logout: () => apiRequest('/auth/logout', { method: 'POST' }),
   },
   dashboard: {
     getStats: () => apiRequest('/dashboard/stats'),
@@ -90,7 +92,6 @@ export const api = {
   },
   checkin: {
     verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),
-    autoReleaseScan: () => apiRequest('/checkin/auto-release-scan', { method: 'POST' }),
   },
   notifications: {
     list: () => apiRequest('/notifications'),

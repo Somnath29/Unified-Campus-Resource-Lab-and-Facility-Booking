@@ -80,7 +80,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.auth.logout();
+    } catch {
+      // ignore
+    }
     clearStoredToken();
     setToken(null);
     setUser(null);

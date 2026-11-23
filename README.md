@@ -6,21 +6,20 @@ An enterprise university facility and resource booking platform designed with a 
 
 ## 1. System Architecture & Tech Stack
 
-This project is structured as a production-grade monorepo containing three interconnected applications sharing a PostgreSQL database and a shared types package:
+This project is structured as a production-grade monorepo containing two interconnected frontend/full-stack applications sharing a PostgreSQL database and a shared types package:
 
 ```
 ├── packages/
 │   └── shared/          # Shared TypeScript interfaces, enums, DTOs, and constants
 ├── apps/
-│   ├── backend/         # Node.js + Express + TypeScript + Prisma ORM (Port 5001)
-│   ├── web/             # Next.js (App Router) + TypeScript + Tailwind CSS (Port 3000)
+│   ├── web/             # Next.js 14 (App Router) + API Route Handlers + Prisma ORM (Port 3000)
 │   └── admin/           # React + Vite + TypeScript + Recharts + React Router (Port 5173)
 ```
 
-- **Backend**: Node.js, Express.js, TypeScript, PostgreSQL, Prisma ORM, JWT, bcryptjs, Zod.
-- **Main Web Application**: Next.js 14 (App Router), React, TypeScript, Tailwind CSS, Lucide Icons, QRCode.
-- **Admin Analytics Application**: React + Vite, TypeScript, React Router v6, Recharts, Tailwind CSS.
-- **Database**: PostgreSQL with Prisma ORM.
+- **Main Web Application & API (`apps/web`)**: Next.js 14 (App Router), React, TypeScript, Tailwind CSS, Lucide Icons, QRCode. All REST API endpoints are hosted as Next.js Route Handlers (`/api/*`), powered by Prisma ORM singleton, JWT auth with httpOnly cookies & Bearer tokens, bcryptjs, and Zod runtime environment validation.
+- **Admin Analytics Application (`apps/admin`)**: React + Vite, TypeScript, React Router v6, Recharts, Tailwind CSS. Connects to `http://localhost:3000/api` with credentials and preflight CORS support.
+- **Database**: PostgreSQL with Prisma ORM (managed in `apps/web/prisma`).
+- **Note**: The legacy standalone Express backend (`apps/backend`, port 5001) has been completely migrated into Next.js Route Handlers inside `apps/web` (port 3000) and removed.
 
 ---
 
@@ -43,7 +42,7 @@ The platform implements four distinct roles with role-based access control (RBAC
 
 1. **Authentication (Module 1)**:
    - Split-screen hero login with campus backdrop and 4 capability pills.
-   - JWT authentication, bcrypt password hashing, role-based guard middleware.
+   - JWT authentication via httpOnly cookie + Authorization header, bcrypt password hashing, role-based guard helpers.
    - 1-Click fast role switcher for evaluations.
 
 2. **Dashboard (Module 2)**:
@@ -66,7 +65,7 @@ The platform implements four distinct roles with role-based access control (RBAC
 
 5. **Booking System (Module 5)**:
    - Comprehensive reservation form with agenda, attendance, priority, and date/time.
-   - **Strict Double-Booking Prevention**: Prohibits overlapping room reservations.
+   - **Strict Double-Booking Prevention**: Prohibits overlapping room reservations (returns 409).
    - **Timetable Conflict Verification**: Blocks bookings during scheduled lectures.
    - Auto-generates unique 8-character reference (`LPU-2026-XXXX`) and 6-digit verification PIN.
 
@@ -80,8 +79,7 @@ The platform implements four distinct roles with role-based access control (RBAC
 7. **Check-in System (Module 7)**:
    - High-resolution SVG QR code generation for venue scanning.
    - 6-digit numeric PIN verification (`/api/checkin/verify`).
-   - **Background Auto-Release Daemon**: Periodically scans for unverified bookings past the 15-minute start deadline, marks them `NO_SHOW`, releases the room back to the pool, and notifies the requester.
-   - "Trigger Background Auto-Release Scanner" button to simulate no-show releases on demand.
+   - **Serverless Auto-Release Cron**: Exposes `GET /api/cron/auto-release` with `Authorization: Bearer <CRON_SECRET>`. Marks overdue bookings as `NO_SHOW`, releases the room back to the pool, and notifies the requester. Configured in `vercel.json` to run every 5 minutes.
 
 8. **Analytics Dashboard (Module 8 - React + Vite + Recharts)**:
    - Standalone Vite application running on port 5173.
@@ -110,23 +108,33 @@ The platform implements four distinct roles with role-based access control (RBAC
 - Node.js `v18+` or `v20+`
 - PostgreSQL running locally (Database name: `lpu_campus_booking`)
 
+### Setup and Database Initialization
+
+1. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+2. **Database Push & Seed**:
+   ```bash
+   npm run db:push
+   npm run db:seed
+   ```
+
 ### Starting the Applications
 
-1. **Start Backend API** (Express + TypeScript + PostgreSQL):
-   ```bash
-   npm --workspace=@lpu/backend run start
-   # Server runs on http://localhost:5001
-   ```
+- **Start all applications concurrently**:
+  ```bash
+  npm run dev
+  ```
+  - **Main Web Application & API**: [http://localhost:3000](http://localhost:3000)
+  - **Admin Analytics Dashboard**: [http://localhost:5173](http://localhost:5173)
 
-2. **Start Main Web Portal** (Next.js):
-   ```bash
-   npm --workspace=@lpu/web run dev
-   # Web portal runs on http://localhost:3000
-   ```
+- Or start them individually:
+  ```bash
+  # Next.js Web App & API (Port 3000)
+  npm run dev:web
 
-3. **Start Admin Analytics Portal** (React + Vite + Recharts):
-   ```bash
-   npm --workspace=@lpu/admin run dev
-   # Admin portal runs on http://localhost:5173
-   ```
-
+  # Admin Vite React App (Port 5173)
+  npm run dev:admin
+  ```

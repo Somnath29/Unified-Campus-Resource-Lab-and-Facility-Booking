@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Building,
@@ -9,10 +9,18 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldAlert,
+  LogOut,
 } from 'lucide-react';
+import { clearAdminToken } from '../../lib/api';
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    clearAdminToken();
+    navigate('/login');
+  };
 
   const navItems = [
     { name: 'Analytics & Insights', path: '/', icon: BarChart3 },
@@ -96,16 +104,25 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
         {/* Bottom Administrator Card */}
         <div className="p-4 border-t border-[#232734] space-y-2">
-          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#1D212C] border border-[#2B3040]">
-            <img
-              src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80"
-              alt="Rajesh Verma"
-              className="w-8 h-8 rounded-full object-cover border border-[#F58220]"
-            />
-            <div className="overflow-hidden">
-              <div className="text-xs font-bold text-white truncate">Rajesh Verma</div>
-              <div className="text-[10px] text-gray-400 truncate">Campus Administrator</div>
+          <div className="flex items-center justify-between p-2 rounded-xl bg-[#1D212C] border border-[#2B3040]">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <img
+                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80"
+                alt="Rajesh Verma"
+                className="w-8 h-8 rounded-full object-cover border border-[#F58220] shrink-0"
+              />
+              <div className="overflow-hidden">
+                <div className="text-xs font-bold text-white truncate">Rajesh Verma</div>
+                <div className="text-[10px] text-gray-400 truncate">Campus Administrator</div>
+              </div>
             </div>
+            <button
+              onClick={handleLogout}
+              title="Sign Out"
+              className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-[#282D3D] rounded-lg transition shrink-0"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
           <div className="text-[10px] text-gray-500 text-center">
             PostgreSQL • Prisma • Node.js API
