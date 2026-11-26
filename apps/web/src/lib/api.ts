@@ -75,7 +75,18 @@ export const api = {
     },
   },
   bookings: {
-    create: (body: any) => apiRequest('/bookings', { method: 'POST', body: JSON.stringify(body) }),
+    create: (body: any, idempotencyKey?: string) =>
+      apiRequest('/bookings', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+          'Idempotency-Key':
+            idempotencyKey ||
+            (typeof crypto !== 'undefined' && crypto.randomUUID
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`),
+        },
+      }),
     list: (params?: Record<string, string>) => {
       const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
       return apiRequest(`/bookings${qs}`);
