@@ -35,6 +35,19 @@ export function withErrorHandling(
         return fail(err.status, err.message, err.details);
       }
 
+      const msg = String(err?.message || '');
+      if (
+        err?.code === '23P01' ||
+        msg.includes('23P01') ||
+        msg.includes('no_overlapping_bookings') ||
+        msg.includes('conflicting key value violates exclusion constraint')
+      ) {
+        return fail(
+          409,
+          'Slot conflict: The selected resource is already booked or reserved during this time window.'
+        );
+      }
+
       if (err instanceof Prisma.PrismaClientKnownRequestError) {
         if (err.code === 'P2002') {
           return fail(409, 'A resource with this identifier or unique field already exists.');

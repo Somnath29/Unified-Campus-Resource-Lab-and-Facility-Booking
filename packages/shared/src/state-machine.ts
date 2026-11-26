@@ -28,7 +28,7 @@ export class InvalidStateTransitionError extends Error {
  * Checks whether a transition between two booking statuses is permitted.
  */
 export function isValidBookingTransition(from: BookingStatus, to: BookingStatus): boolean {
-  if (from === to) return true;
+  if (from === to) return false;
   const allowed = ALLOWED_BOOKING_TRANSITIONS[from];
   return allowed ? allowed.includes(to) : false;
 }
