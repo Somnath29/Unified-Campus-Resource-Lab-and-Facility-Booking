@@ -102,6 +102,8 @@ export const api = {
     getById: (id: string) => apiRequest<any>(`/approvals/${id}`),
     takeAction: (id: string, body: any) => apiRequest<any>(`/approvals/${id}/action`, { method: 'POST', body: JSON.stringify(body) }),
     addComment: (id: string, body: { body: string; isInternal?: boolean }) => apiRequest<any>(`/approvals/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
+    getCompeting: (id: string) => apiRequest<any>(`/approvals/${id}/competing`),
+    getAlternatives: (id: string) => apiRequest<any>(`/approvals/${id}/alternatives`),
   },
   checkin: {
     verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),

@@ -7,6 +7,10 @@ import {
   ApprovalError,
   getAuthorizedDepartmentIds,
 } from '../services/approvalService';
+import {
+  getCompetingBookings,
+  getAlternativeSuggestions,
+} from '../services/alternativeSuggestion.service';
 
 import { AuthenticatedUser } from '../middleware/auth';
 
@@ -546,6 +550,62 @@ router.post(
     } catch (err) {
       console.error('Error posting comment:', err);
       return res.status(500).json({ error: 'Failed to post comment.' });
+    }
+  }
+);
+
+// ============================================================================
+// 6. GET /api/approvals/:id/competing - Competing Booking Requests (P5)
+// ============================================================================
+router.get(
+  '/:id/competing',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const approver = req.user!;
+      const result = await getCompetingBookings(id, approver);
+      return res.json({
+        bookingId: id,
+        competingBookings: result.competingBookings,
+        total: result.competingBookings.length,
+      });
+    } catch (err: any) {
+      if (err.message?.includes('Forbidden')) {
+        return res.status(403).json({ error: err.message });
+      }
+      if (err.message?.includes('not found')) {
+        return res.status(404).json({ error: err.message });
+      }
+      console.error('Error fetching competing bookings:', err);
+      return res.status(500).json({ error: 'Failed to retrieve competing bookings.' });
+    }
+  }
+);
+
+// ============================================================================
+// 7. GET /api/approvals/:id/alternatives - Alternative Room & Time Suggestions (P5)
+// ============================================================================
+router.get(
+  '/:id/alternatives',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const approver = req.user!;
+      const suggestions = await getAlternativeSuggestions(id, approver);
+      return res.json(suggestions);
+    } catch (err: any) {
+      if (err.message?.includes('Forbidden')) {
+        return res.status(403).json({ error: err.message });
+      }
+      if (err.message?.includes('not found')) {
+        return res.status(404).json({ error: err.message });
+      }
+      console.error('Error calculating alternative suggestions:', err);
+      return res.status(500).json({ error: 'Failed to generate alternative suggestions.' });
     }
   }
 );

@@ -89,9 +89,11 @@ export default function ApprovalsPage() {
   const [drawerBookingId, setDrawerBookingId] = useState<string | null>(null);
   const [drawerDetails, setDrawerDetails] = useState<any>(null);
   const [isLoadingDrawer, setIsLoadingDrawer] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<'OVERVIEW' | 'TIMELINE' | 'POLICY_COMMENTS'>('OVERVIEW');
+  const [drawerTab, setDrawerTab] = useState<'OVERVIEW' | 'TIMELINE' | 'ALTERNATIVES' | 'POLICY_COMMENTS'>('OVERVIEW');
   const [drawerTimetable, setDrawerTimetable] = useState<any[]>([]);
   const [drawerNeighbours, setDrawerNeighbours] = useState<any[]>([]);
+  const [drawerAlternatives, setDrawerAlternatives] = useState<any>(null);
+  const [isLoadingAlternatives, setIsLoadingAlternatives] = useState(false);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [isInternalComment, setIsInternalComment] = useState(false);
@@ -258,6 +260,14 @@ export default function ApprovalsPage() {
         setDrawerNeighbours(sameDayBookings);
         setIsLoadingSchedule(false);
       }
+
+      // 3. Fetch Alternative Suggestions (P5)
+      setIsLoadingAlternatives(true);
+      api.approvals
+        .getAlternatives(id)
+        .then((altData) => setDrawerAlternatives(altData))
+        .catch((e) => console.error('Failed to load alternative suggestions:', e))
+        .finally(() => setIsLoadingAlternatives(false));
     } catch (err: any) {
       showToast('error', err.message || 'Failed to load booking details.', 'Error');
     } finally {
@@ -275,6 +285,7 @@ export default function ApprovalsPage() {
     setDrawerDetails(null);
     setDrawerTimetable([]);
     setDrawerNeighbours([]);
+    setDrawerAlternatives(null);
   };
 
   // --------------------------------------------------------------------------
@@ -511,16 +522,19 @@ export default function ApprovalsPage() {
     }
   };
 
-  const handleModifyOpen = (booking: EnrichedApprovalItemDTO) => {
-    setModifiedResourceId(booking.resourceId);
-    const start = new Date(booking.startTime);
-    const end = new Date(booking.endTime);
+  const handleModifyOpen = (
+    booking: EnrichedApprovalItemDTO,
+    preset?: { resourceId?: string; startTime?: string; endTime?: string; reason?: string }
+  ) => {
+    setModifiedResourceId(preset?.resourceId || booking.resourceId);
+    const start = preset?.startTime ? new Date(preset.startTime) : new Date(booking.startTime);
+    const end = preset?.endTime ? new Date(preset.endTime) : new Date(booking.endTime);
 
     setModifyStartDate(start.toISOString().split('T')[0]);
     setModifyStartTime(start.toTimeString().substring(0, 5));
     setModifyEndDate(end.toISOString().split('T')[0]);
     setModifyEndTime(end.toTimeString().substring(0, 5));
-    setModifyNotes('');
+    setModifyNotes(preset?.reason || '');
     setActionModal({ type: 'MODIFY', booking });
   };
 
@@ -1669,6 +1683,22 @@ export default function ApprovalsPage() {
                 Schedule & Timetable
               </button>
               <button
+                onClick={() => setDrawerTab('ALTERNATIVES')}
+                className={`pb-2.5 transition border-b-2 flex items-center gap-1.5 ${
+                  drawerTab === 'ALTERNATIVES'
+                    ? 'border-[#F58220] text-[#F58220]'
+                    : 'border-transparent hover:text-gray-900'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Alternative Suggestions</span>
+                {drawerAlternatives && (drawerAlternatives.alternativeRooms?.length > 0 || drawerAlternatives.alternativeTimes?.length > 0) && (
+                  <span className="bg-orange-100 text-[#F58220] text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    {(drawerAlternatives.alternativeRooms?.length || 0) + (drawerAlternatives.alternativeTimes?.length || 0)}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setDrawerTab('POLICY_COMMENTS')}
                 className={`pb-2.5 transition border-b-2 ${
                   drawerTab === 'POLICY_COMMENTS'
@@ -1971,6 +2001,221 @@ export default function ApprovalsPage() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* TAB: ALTERNATIVE SUGGESTIONS & COMPETING REQUESTS (P5) */}
+                  {drawerTab === 'ALTERNATIVES' && (
+                    <div className="space-y-6">
+                      {/* Competing Requests Breakdown */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-black uppercase text-gray-600 tracking-wider flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-500" />
+                            <span>
+                              Competing Overlapping Requests (
+                              {drawerAlternatives?.competingCount ?? (drawerDetails.issues?.competingCount || 0)})
+                            </span>
+                          </div>
+                          {drawerAlternatives?.hasCompeting && (
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                              HIGH CONTENTION
+                            </span>
+                          )}
+                        </div>
+
+                        {isLoadingAlternatives ? (
+                          <div className="p-6 text-center text-xs text-gray-400 bg-[#FAF9F6] rounded-2xl border border-gray-200">
+                            <div className="w-5 h-5 border-2 border-[#F58220] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                            Analyzing competing requests...
+                          </div>
+                        ) : !drawerAlternatives?.competingBookings || drawerAlternatives.competingBookings.length === 0 ? (
+                          <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>No other conflicting requests compete for this time slot on this resource.</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {drawerAlternatives.competingBookings.map((cb: any) => (
+                              <div
+                                key={cb.id}
+                                className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl text-xs space-y-1.5"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="font-extrabold text-amber-950 flex items-center gap-1.5">
+                                    <span>#{cb.bookingNumber}</span>
+                                    <span className="text-gray-500 font-normal">by</span>
+                                    <span>{cb.user?.name}</span>
+                                    <span className="text-[10px] text-gray-400">({cb.user?.role})</span>
+                                  </div>
+                                  <span
+                                    className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+                                      cb.priority === 'URGENT'
+                                        ? 'bg-red-100 text-red-800'
+                                        : cb.priority === 'HIGH'
+                                        ? 'bg-orange-100 text-orange-800'
+                                        : 'bg-gray-100 text-gray-700'
+                                    }`}
+                                  >
+                                    {cb.priority}
+                                  </span>
+                                </div>
+                                <div className="text-gray-600 truncate">{cb.purpose}</div>
+                                <div className="text-[11px] text-gray-500 flex items-center justify-between">
+                                  <span>Expected: {cb.expectedAttendance} attendees</span>
+                                  <span className="font-mono text-gray-700">
+                                    {new Date(cb.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
+                                    {new Date(cb.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Alternative Rooms Ranked by Suitability */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-black uppercase text-gray-600 tracking-wider flex items-center gap-1.5">
+                            <Building className="w-4 h-4 text-blue-600" />
+                            <span>Recommended Alternative Rooms</span>
+                          </div>
+                          <span className="text-[10px] text-gray-400">Ranked by Building, Capacity & Availability</span>
+                        </div>
+
+                        {isLoadingAlternatives ? (
+                          <div className="p-8 text-center text-xs text-gray-400 bg-[#FAF9F6] rounded-2xl border border-gray-200">
+                            <div className="w-5 h-5 border-2 border-[#F58220] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                            Finding suitable available facilities...
+                          </div>
+                        ) : !drawerAlternatives?.alternativeRooms || drawerAlternatives.alternativeRooms.length === 0 ? (
+                          <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 text-xs text-gray-500 text-center">
+                            No alternative rooms match the requested capacity and schedule criteria within your authorized departments.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {drawerAlternatives.alternativeRooms.map((alt: any) => (
+                              <div
+                                key={alt.resourceId}
+                                className="p-4 bg-white border border-gray-200 rounded-2xl shadow-2xs hover:border-blue-300 transition space-y-2.5"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-extrabold text-sm text-gray-900">{alt.name}</span>
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">
+                                        {alt.building} {alt.floor ? `(Floor ${alt.floor})` : ''}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-0.5">
+                                      {alt.department} • Capacity: <strong className="text-gray-900">{alt.capacity}</strong> seats
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    onClick={() =>
+                                      handleModifyOpen(drawerDetails, {
+                                        resourceId: alt.resourceId,
+                                        reason: `Reassigned to alternative ${alt.name} (${alt.reasons[0] || 'Suitable match'}).`,
+                                      })
+                                    }
+                                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition shrink-0 flex items-center gap-1"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    <span>Select Room</span>
+                                  </button>
+                                </div>
+
+                                {/* Match Reasons Badges */}
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-black uppercase text-gray-400">Why recommended:</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {alt.reasons?.map((r: string, idx: number) => (
+                                      <span
+                                        key={idx}
+                                        className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-gray-50 border border-gray-200 text-gray-700 flex items-center gap-1"
+                                      >
+                                        <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                                        <span>{r}</span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Alternative Available Time Slots */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-black uppercase text-gray-600 tracking-wider flex items-center gap-1.5">
+                            <Clock className="w-4 h-4 text-purple-600" />
+                            <span>Alternative Open Time Slots</span>
+                          </div>
+                          <span className="text-[10px] text-gray-400">Same Room • Same Duration</span>
+                        </div>
+
+                        {isLoadingAlternatives ? (
+                          <div className="p-8 text-center text-xs text-gray-400 bg-[#FAF9F6] rounded-2xl border border-gray-200">
+                            <div className="w-5 h-5 border-2 border-[#F58220] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                            Searching free time slots on timetable...
+                          </div>
+                        ) : !drawerAlternatives?.alternativeTimes || drawerAlternatives.alternativeTimes.length === 0 ? (
+                          <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 text-xs text-gray-500 text-center">
+                            No open time slots detected on adjacent days within operating hours.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {drawerAlternatives.alternativeTimes.map((ts: any, idx: number) => (
+                              <div
+                                key={idx}
+                                className="p-3 bg-purple-50/50 border border-purple-200 rounded-2xl flex items-center justify-between gap-3"
+                              >
+                                <div>
+                                  <div className="font-extrabold text-xs text-purple-950 flex items-center gap-2">
+                                    <Clock className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                                    <span>
+                                      {new Date(ts.startTime).toLocaleDateString([], {
+                                        weekday: 'short',
+                                        month: 'short',
+                                        day: 'numeric',
+                                      })}
+                                      ,{' '}
+                                      {new Date(ts.startTime).toLocaleTimeString([], {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}{' '}
+                                      -{' '}
+                                      {new Date(ts.endTime).toLocaleTimeString([], {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-gray-600 mt-0.5">{ts.reason}</div>
+                                </div>
+
+                                <button
+                                  onClick={() =>
+                                    handleModifyOpen(drawerDetails, {
+                                      startTime: ts.startTime,
+                                      endTime: ts.endTime,
+                                      reason: `Rescheduled to open slot ${ts.reason.split('(')[0].trim()}.`,
+                                    })
+                                  }
+                                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs transition shrink-0 flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Use Slot</span>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -2311,6 +2556,35 @@ export default function ApprovalsPage() {
                     </option>
                   ))}
                 </select>
+                {drawerAlternatives?.alternativeRooms && drawerAlternatives.alternativeRooms.length > 0 && (
+                  <div className="mt-2 p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1.5">
+                    <div className="text-[10px] font-black uppercase text-blue-900 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-blue-600" />
+                      <span>Suggested Alternatives (Quick Pick)</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {drawerAlternatives.alternativeRooms.slice(0, 3).map((alt: any) => (
+                        <button
+                          key={alt.resourceId}
+                          type="button"
+                          onClick={() => {
+                            setModifiedResourceId(alt.resourceId);
+                            if (!modifyNotes) {
+                              setModifyNotes(`Reassigned to recommended ${alt.name} (${alt.reasons[0] || 'Suitable match'}).`);
+                            }
+                          }}
+                          className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition text-left ${
+                            modifyResourceId === alt.resourceId
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-blue-900 border-blue-200 hover:bg-blue-100'
+                          }`}
+                        >
+                          {alt.name} (Cap {alt.capacity})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2">
