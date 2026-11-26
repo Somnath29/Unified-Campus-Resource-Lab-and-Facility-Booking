@@ -42,7 +42,10 @@ export async function apiRequest<T = any>(
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error || data.message || `Request failed with status ${response.status}`);
+    const error: any = new Error(data.error || data.message || `Request failed with status ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
 
   return data;
@@ -58,7 +61,7 @@ export const api = {
     logout: () => apiRequest('/auth/logout', { method: 'POST' }),
   },
   dashboard: {
-    getStats: () => apiRequest('/dashboard/stats'),
+    getStats: () => apiRequest<import('@lpu/shared').DashboardDataResponse>('/dashboard'),
   },
   resources: {
     list: (params?: Record<string, string | number | boolean | undefined>) => {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -16,8 +16,10 @@ import {
   AlertCircle,
   QrCode,
   MapPin,
-  Heart,
+  RefreshCw,
   SlidersHorizontal,
+  BookOpen,
+  PieChart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
@@ -25,38 +27,59 @@ import { BookingModal } from '@/components/booking/BookingModal';
 import { CheckInModal } from '@/components/booking/CheckInModal';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
-import { ResourceDTO, BookingDTO } from '@lpu/shared';
+import {
+  ResourceDTO,
+  BookingDTO,
+  DashboardStats,
+  ResourceRecommendationItem,
+} from '@lpu/shared';
+import {
+  getCurrentKolkataDateString,
+  formatKolkataDate,
+  formatKolkataTimeRange,
+  formatKolkataTime,
+  addDaysKolkata,
+  getDayOfWeekInKolkata,
+  kolkataToUtc,
+} from '@/lib/timezone';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, isLoading: authLoading } = useAuth();
 
-  const [stats, setStats] = useState<any>({
-    upcomingBookingsCount: 3,
-    pendingRequestsCount: 1,
-    availableResourcesCount: 42,
-    clubBookingsCount: 5,
-    nextBooking: null,
-  });
+  // Dashboard Data State (initialized to null to prevent stale/mock data display)
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<BookingDTO[]>([]);
   const [recommendedResources, setRecommendedResources] = useState<ResourceDTO[]>([]);
   const [timetableClasses, setTimetableClasses] = useState<any[]>([]);
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Modals state
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [selectedResourceForBooking, setSelectedResourceForBooking] = useState<ResourceDTO | null>(null);
+  const [bookingPreselectDate, setBookingPreselectDate] = useState<string | undefined>(undefined);
+  const [bookingPreselectStartTime, setBookingPreselectStartTime] = useState<string | undefined>(undefined);
+  const [bookingPreselectEndTime, setBookingPreselectEndTime] = useState<string | undefined>(undefined);
+
   const [isCheckInModalOpen, setIsCheckInModalOpen] = useState(false);
   const [selectedBookingForCheckIn, setSelectedBookingForCheckIn] = useState<BookingDTO | null>(null);
 
-  // Smart Allocation Form State
+  // Smart Allocation Assistant State
   const [allocAttendance, setAllocAttendance] = useState('30');
   const [allocActivity, setAllocActivity] = useState('PROJECT_WORK');
-  const [allocDate, setAllocDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [allocDate, setAllocDate] = useState(() => getCurrentKolkataDateString());
   const [allocTimeSlot, setAllocTimeSlot] = useState('14:00 - 16:00');
+  const [allocBuilding, setAllocBuilding] = useState('ALL');
   const [isSearchingAlloc, setIsSearchingAlloc] = useState(false);
+  const [allocRecommendations, setAllocRecommendations] = useState<ResourceRecommendationItem[]>([]);
+  const [allocSearchDone, setAllocSearchDone] = useState(false);
 
-  // Schedule Day Selector (Mon - Sun)
-  const [selectedScheduleDay, setSelectedScheduleDay] = useState(1); // 1 = Monday
+  // Weekly Schedule Day Selector (0=Sun, 1=Mon, ..., 6=Sat)
+  const [selectedScheduleDay, setSelectedScheduleDay] = useState<number>(() => {
+    return getDayOfWeekInKolkata(new Date());
+  });
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -64,24 +87,39 @@ export default function DashboardPage() {
     }
   }, [user, authLoading, router]);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, [user]);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
+    if (!user) return;
+    setIsLoading(true);
+    setErrorMessage(null);
     try {
       const res = await api.dashboard.getStats();
       if (res.stats) setStats(res.stats);
       if (res.upcomingBookings) setUpcomingBookings(res.upcomingBookings);
       if (res.recommendedResources) setRecommendedResources(res.recommendedResources);
       if (res.timetableClasses) setTimetableClasses(res.timetableClasses);
-    } catch (err) {
+      if (res.recentActivity) setRecentActivity(res.recentActivity);
+    } catch (err: any) {
       console.error('Error loading dashboard data:', err);
+      setErrorMessage(err.message || 'Unable to load dashboard records.');
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, [user]);
 
-  const handleOpenBooking = (resource?: ResourceDTO) => {
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData]);
+
+  const handleOpenBooking = (
+    resource?: ResourceDTO,
+    date?: string,
+    startTime?: string,
+    endTime?: string
+  ) => {
     setSelectedResourceForBooking(resource || null);
+    setBookingPreselectDate(date);
+    setBookingPreselectStartTime(startTime);
+    setBookingPreselectEndTime(endTime);
     setIsBookingModalOpen(true);
   };
 
@@ -93,25 +131,67 @@ export default function DashboardPage() {
   const handleSmartAllocate = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSearchingAlloc(true);
+    setAllocSearchDone(false);
+
     try {
       const res = await api.resources.smartAllocation({
-        expectedAttendance: Number(allocAttendance),
+        expectedAttendance: Number(allocAttendance) || 30,
         activityType: allocActivity,
         date: allocDate,
         timeSlot: allocTimeSlot,
+        preferredBuilding: allocBuilding !== 'ALL' ? allocBuilding : undefined,
       });
 
-      if (res.matches && res.matches.length > 0) {
-        handleOpenBooking(res.matches[0]);
-      } else {
-        router.push('/resources');
+      if (res.recommendations) {
+        setAllocRecommendations(res.recommendations);
+      } else if (res.matches) {
+        setAllocRecommendations(
+          res.matches.map((m: any, idx: number) => ({
+            resource: m,
+            rankingScore: 100 - idx * 10,
+            reason: `Matches group size and activity requirements`,
+            capacityFitRatio: 1.0,
+            matchedAmenities: [],
+            buildingMatch: true,
+            isAvailable: true,
+          }))
+        );
       }
-    } catch {
-      router.push('/resources');
+      setAllocSearchDone(true);
+    } catch (err) {
+      console.error('Smart allocation error:', err);
+      setAllocRecommendations([]);
+      setAllocSearchDone(true);
     } finally {
       setIsSearchingAlloc(false);
     }
   };
+
+  // Compute dynamic 7 days of the current week in Asia/Kolkata
+  const todayStr = getCurrentKolkataDateString();
+  const todayDateObj = kolkataToUtc(todayStr, '12:00');
+  const todayDayOfWeek = getDayOfWeekInKolkata(todayDateObj);
+  const diffToMonday = (todayDayOfWeek === 0 ? -6 : 1) - todayDayOfWeek;
+
+  const currentMondayStr = addDaysKolkata(todayStr, diffToMonday);
+
+  const daysList = [
+    { name: 'Mon', dayOfWeek: 1, dateStr: currentMondayStr },
+    { name: 'Tue', dayOfWeek: 2, dateStr: addDaysKolkata(currentMondayStr, 1) },
+    { name: 'Wed', dayOfWeek: 3, dateStr: addDaysKolkata(currentMondayStr, 2) },
+    { name: 'Thu', dayOfWeek: 4, dateStr: addDaysKolkata(currentMondayStr, 3) },
+    { name: 'Fri', dayOfWeek: 5, dateStr: addDaysKolkata(currentMondayStr, 4) },
+    { name: 'Sat', dayOfWeek: 6, dateStr: addDaysKolkata(currentMondayStr, 5) },
+    { name: 'Sun', dayOfWeek: 0, dateStr: addDaysKolkata(currentMondayStr, 6) },
+  ].map((d) => ({
+    ...d,
+    dateDisplay: d.dateStr.split('-')[2],
+  }));
+
+  // Filter timetable classes for the selected day of the week
+  const filteredScheduleClasses = timetableClasses.filter(
+    (c) => c.dayOfWeek === selectedScheduleDay
+  );
 
   if (authLoading || !user) {
     return (
@@ -121,42 +201,31 @@ export default function DashboardPage() {
     );
   }
 
-  const daysList = [
-    { name: 'Mon', date: '27', dayOfWeek: 1 },
-    { name: 'Tue', date: '28', dayOfWeek: 2 },
-    { name: 'Wed', date: '29', dayOfWeek: 3 },
-    { name: 'Thu', date: '30', dayOfWeek: 4 },
-    { name: 'Fri', date: '31', dayOfWeek: 5 },
-    { name: 'Sat', date: '1', dayOfWeek: 6 },
-    { name: 'Sun', date: '2', dayOfWeek: 0 },
-  ];
-
   return (
-    <div className="min-h-screen bg-[#F5F5F5] flex">
-      {/* Sidebar */}
+    <div className="min-h-screen bg-[#F5F5F5] flex flex-col lg:flex-row">
       <Sidebar
-        pendingApprovalsCount={stats.pendingRequestsCount}
+        pendingApprovalsCount={stats?.pendingRequestsCount || 0}
         unreadNotificationsCount={3}
       />
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         <Navbar />
 
-        <main className="flex-1 p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
           {/* Header Row: Greeting & "+ Book a Resource" Button */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl lg:text-3xl font-extrabold text-[#292929] tracking-tight flex items-center gap-2">
-                <span>Good morning, {user.name.split(' ')[0]}</span>
-                <span className="text-2xl">☀️</span>
+                <span>Welcome, {user.name.split(' ')[0]}</span>
+                <span className="text-2xl">🎓</span>
               </h1>
               <p className="text-xs sm:text-sm text-gray-500 mt-1">
-                Find and book the right campus resources for your classes, clubs, projects and events.
+                LPU Campus Resource Booking & Scheduling Platform • Connected to live database
               </p>
             </div>
 
             <button
+              type="button"
               onClick={() => handleOpenBooking()}
               className="px-5 py-2.5 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow-sm transition flex items-center justify-center gap-2 text-sm shrink-0"
             >
@@ -165,19 +234,36 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          {/* Stat Cards Grid (Matching Screenshot 1) */}
+          {/* Error Banner with Retry */}
+          {errorMessage && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center justify-between gap-3 text-xs text-red-800">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+              <button
+                type="button"
+                onClick={loadDashboardData}
+                className="px-3 py-1 bg-red-600 text-white font-bold rounded-lg shadow-sm hover:bg-red-700"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Stat Cards Grid (100% Real API Data) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* 1. Upcoming Bookings */}
             <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition">
               <div className="space-y-1">
                 <div className="text-2xl font-black text-[#292929]">
-                  {stats.upcomingBookingsCount}
+                  {isLoading ? '...' : stats ? stats.upcomingBookingsCount : 0}
                 </div>
                 <div className="text-xs font-bold text-gray-700">Upcoming Bookings</div>
                 <div className="text-[11px] text-gray-400">
-                  {stats.nextBooking
-                    ? `Next: ${new Date(stats.nextBooking.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                    : 'Next: Today, 2:00 PM'}
+                  {upcomingBookings.length > 0
+                    ? `Next: ${formatKolkataDate(upcomingBookings[0].startTime)}`
+                    : 'No upcoming reservations'}
                 </div>
               </div>
               <div className="w-12 h-12 rounded-2xl bg-orange-50 border border-orange-100 flex items-center justify-center text-[#F58220]">
@@ -185,132 +271,148 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* 2. Pending Request */}
+            {/* 2. Pending Requests */}
             <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition">
               <div className="space-y-1">
                 <div className="text-2xl font-black text-[#292929]">
-                  {stats.pendingRequestsCount}
+                  {isLoading ? '...' : stats ? stats.pendingRequestsCount : 0}
                 </div>
-                <div className="text-xs font-bold text-gray-700">Pending Request</div>
-                <div className="text-[11px] text-gray-400">Awaiting approval</div>
+                <div className="text-xs font-bold text-gray-700">Pending Approvals</div>
+                <div className="text-[11px] text-gray-400">Department review queue</div>
               </div>
               <div className="w-12 h-12 rounded-2xl bg-[#FFF4EA] border border-[#FED7AA] flex items-center justify-center text-[#F58220]">
                 <Clock className="w-6 h-6" />
               </div>
             </div>
 
-            {/* 3. Available Resources */}
+            {/* 3. Weekly Quota (A7 Policy Engine) */}
             <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition">
               <div className="space-y-1">
                 <div className="text-2xl font-black text-[#292929]">
-                  {stats.availableResourcesCount || 42}
+                  {isLoading
+                    ? '...'
+                    : stats
+                    ? `${stats.remainingWeeklyQuota}h`
+                    : '20h'}
                 </div>
-                <div className="text-xs font-bold text-gray-700">Available Resources</div>
-                <div className="text-[11px] text-gray-400">Classrooms, Labs, Halls & more</div>
+                <div className="text-xs font-bold text-gray-700">Weekly Quota Remaining</div>
+                <div className="text-[11px] text-gray-400">
+                  Max: {stats ? `${stats.maxWeeklyHours}h / week` : '20h / week'}
+                </div>
+              </div>
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#1976B9]">
+                <PieChart className="w-6 h-6" />
+              </div>
+            </div>
+
+            {/* 4. Available Resources */}
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition">
+              <div className="space-y-1">
+                <div className="text-2xl font-black text-[#292929]">
+                  {isLoading ? '...' : stats ? stats.availableResourcesCount : 0}
+                </div>
+                <div className="text-xs font-bold text-gray-700">Available Facilities</div>
+                <div className="text-[11px] text-gray-400">Classrooms, Labs & Halls</div>
               </div>
               <div className="w-12 h-12 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-700">
                 <Building className="w-6 h-6" />
               </div>
             </div>
-
-            {/* 4. Club Bookings */}
-            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition">
-              <div className="space-y-1">
-                <div className="text-2xl font-black text-[#292929]">
-                  {stats.clubBookingsCount}
-                </div>
-                <div className="text-xs font-bold text-gray-700">Your Club Bookings</div>
-                <div className="text-[11px] text-gray-400">This semester</div>
-              </div>
-              <div className="w-12 h-12 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-700">
-                <Users className="w-6 h-6" />
-              </div>
-            </div>
           </div>
 
           {/* Two-Column Layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* LEFT COLUMN: What do you need today? + Upcoming Bookings List (7 Cols) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* LEFT COLUMN: Smart Allocation Assistant + Upcoming Bookings (7 Cols) */}
             <div className="lg:col-span-7 space-y-6">
-              {/* Smart Room Allocation Form Card (Matching Screenshot 1) */}
-              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-5">
+              {/* Smart Allocation Assistant Card */}
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-base font-extrabold text-[#292929]">
                       What do you need today?
                     </h2>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Tell us your requirements and we'll suggest the best-fit rooms for you.
+                      Tell us your requirements and the Smart Allocation Assistant will rank the best-fit free rooms.
                     </p>
                   </div>
-                  <span className="flex items-center gap-1.5 bg-[#FFF4EA] text-[#F58220] border border-[#FED7AA] text-[11px] font-bold px-2.5 py-1 rounded-full">
+                  <span className="flex items-center gap-1.5 bg-[#FFF4EA] text-[#F58220] border border-[#FED7AA] text-[11px] font-bold px-2.5 py-1 rounded-full shrink-0">
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>Smart Allocation</span>
                   </span>
                 </div>
 
                 <form onSubmit={handleSmartAllocate} className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     {/* Expected Attendance */}
                     <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
+                      <label htmlFor="alloc-attendance" className="block text-xs font-bold text-gray-700 mb-1">
                         Expected Attendance
                       </label>
                       <div className="relative">
-                        <Users className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <Users className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
                         <input
+                          id="alloc-attendance"
                           type="number"
                           value={allocAttendance}
                           onChange={(e) => setAllocAttendance(e.target.value)}
                           placeholder="e.g. 30"
                           min={1}
-                          className="w-full pl-10 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
+                          required
+                          className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
                         />
                       </div>
                     </div>
 
                     {/* Activity Type */}
                     <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
+                      <label htmlFor="alloc-activity" className="block text-xs font-bold text-gray-700 mb-1">
                         Activity Type
                       </label>
                       <select
+                        id="alloc-activity"
                         value={allocActivity}
                         onChange={(e) => setAllocActivity(e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
                       >
                         <option value="PROJECT_WORK">Project Work / Discussion</option>
-                        <option value="CLASS_LECTURE">Class Discussion / Lecture</option>
+                        <option value="CLASS_LECTURE">Class Lecture / Review</option>
                         <option value="LAB_SESSION">Lab Session / Practical</option>
-                        <option value="CLUB_EVENT">Club Meeting / Event</option>
-                        <option value="GUEST_SEMINAR">Guest Seminar / Presentation</option>
+                        <option value="CLUB_EVENT">Club Meeting / Activity</option>
+                        <option value="GUEST_SEMINAR">Guest Seminar / Workshop</option>
                       </select>
                     </div>
 
                     {/* Date */}
                     <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">Date</label>
+                      <label htmlFor="alloc-date" className="block text-xs font-bold text-gray-700 mb-1">
+                        Booking Date
+                      </label>
                       <div className="relative">
-                        <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
                         <input
+                          id="alloc-date"
                           type="date"
                           value={allocDate}
                           onChange={(e) => setAllocDate(e.target.value)}
-                          className="w-full pl-10 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
+                          className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
                         />
                       </div>
                     </div>
 
-                    {/* Time */}
+                    {/* Time Slot */}
                     <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">Time Slot</label>
+                      <label htmlFor="alloc-time" className="block text-xs font-bold text-gray-700 mb-1">
+                        Desired Time Slot
+                      </label>
                       <div className="relative">
-                        <Clock className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <Clock className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
                         <select
+                          id="alloc-time"
                           value={allocTimeSlot}
                           onChange={(e) => setAllocTimeSlot(e.target.value)}
-                          className="w-full pl-10 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
+                          className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#F58220]/20 focus:border-[#F58220]"
                         >
+                          <option value="09:00 - 10:00">09:00 AM - 10:00 AM</option>
                           <option value="10:00 - 12:00">10:00 AM - 12:00 PM</option>
                           <option value="12:00 - 14:00">12:00 PM - 02:00 PM</option>
                           <option value="14:00 - 16:00">02:00 PM - 04:00 PM</option>
@@ -324,7 +426,7 @@ export default function DashboardPage() {
                   <button
                     type="submit"
                     disabled={isSearchingAlloc}
-                    className="w-full py-2.5 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow transition flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                    className="w-full py-2.5 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow transition flex items-center justify-center gap-2 text-xs disabled:opacity-50"
                   >
                     {isSearchingAlloc ? (
                       <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -337,12 +439,72 @@ export default function DashboardPage() {
                     )}
                   </button>
                 </form>
+
+                {/* Smart Recommendations Results View */}
+                {allocSearchDone && (
+                  <div className="pt-2 border-t border-gray-100 space-y-3">
+                    <h3 className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center justify-between">
+                      <span>Recommended Rooms</span>
+                      <span className="text-[11px] text-gray-500 font-normal">
+                        {allocRecommendations.length} available matches
+                      </span>
+                    </h3>
+
+                    {allocRecommendations.length === 0 ? (
+                      <div className="p-4 bg-gray-50 rounded-xl text-center text-xs text-gray-500 border border-gray-200">
+                        No rooms available for the requested capacity and time. Try adjusting the time window or date.
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {allocRecommendations.slice(0, 3).map((rec) => {
+                          const [sTime, eTime] = allocTimeSlot.split('-').map((s) => s.trim());
+                          return (
+                            <div
+                              key={rec.resource.id}
+                              className="p-3 bg-gray-50 hover:bg-orange-50/50 rounded-xl border border-gray-200 hover:border-[#FED7AA] transition flex items-center justify-between gap-3"
+                            >
+                              <div className="overflow-hidden space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold text-xs text-gray-900 truncate">
+                                    {rec.resource.name}
+                                  </span>
+                                  <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded font-mono font-bold text-gray-600">
+                                    {rec.resource.code}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-gray-500 flex items-center gap-2">
+                                  <span>{rec.resource.building}</span>
+                                  <span>•</span>
+                                  <span>Capacity: {rec.resource.capacity}</span>
+                                </div>
+                                <div className="text-[10px] text-[#F58220] font-semibold flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3" />
+                                  <span>{rec.reason}</span>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleOpenBooking(rec.resource, allocDate, sTime, eTime)}
+                                className="px-3 py-1.5 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition shrink-0"
+                              >
+                                Reserve Room
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Upcoming Bookings List Card (Matching Screenshot 1) */}
-              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+              {/* Upcoming Bookings List Card */}
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-base font-extrabold text-[#292929]">Upcoming Bookings</h2>
+                  <h2 className="text-base font-extrabold text-[#292929]">
+                    Your Upcoming Reservations
+                  </h2>
                   <Link
                     href="/my-bookings"
                     className="text-xs font-bold text-[#F58220] hover:text-[#E06D0C] flex items-center gap-1"
@@ -354,62 +516,55 @@ export default function DashboardPage() {
 
                 <div className="space-y-3">
                   {upcomingBookings.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-gray-400 border border-dashed rounded-xl">
-                      No upcoming bookings. Click '+ Book a Resource' to get started.
+                    <div className="p-8 text-center text-xs text-gray-500 border border-dashed rounded-xl bg-gray-50/50">
+                      No upcoming reservations found. Click '+ Book a Resource' or use the Smart Allocation Assistant above.
                     </div>
                   ) : (
                     upcomingBookings.map((b) => (
                       <div
                         key={b.id}
-                        onClick={() => handleOpenCheckIn(b)}
-                        className="p-3.5 bg-gray-50 hover:bg-orange-50/40 rounded-xl border border-gray-100 hover:border-orange-200 transition flex items-center justify-between gap-4 cursor-pointer group"
+                        className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 hover:border-gray-300 transition flex items-center justify-between gap-4"
                       >
                         <div className="flex items-center gap-3.5 overflow-hidden">
                           <img
                             src={
                               b.resource?.imageUrl ||
-                              'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=600&q=80'
+                              'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=300&q=80'
                             }
                             alt={b.resource?.name}
-                            className="w-14 h-14 rounded-xl object-cover shrink-0 border border-gray-200"
+                            className="w-12 h-12 rounded-xl object-cover shrink-0 border border-gray-200"
                           />
                           <div className="overflow-hidden">
-                            <div className="font-bold text-sm text-[#292929] group-hover:text-[#F58220] transition truncate">
+                            <div className="font-extrabold text-xs text-[#292929] truncate">
                               {b.resource?.name}
                             </div>
                             <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
-                              <Clock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                              <span>
-                                {new Date(b.startTime).toLocaleTimeString([], {
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}{' '}
-                                -{' '}
-                                {new Date(b.endTime).toLocaleTimeString([], {
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}
-                              </span>
+                              <CalendarIcon className="w-3 h-3 text-gray-400" />
+                              <span>{formatKolkataDate(b.startTime)}</span>
+                              <span>•</span>
+                              <span>{formatKolkataTimeRange(b.startTime, b.endTime)}</span>
                             </div>
-                            <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                              {b.purpose}
+                            <div className="text-[11px] font-mono text-gray-400 mt-0.5">
+                              Ref: {b.bookingNumber}
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3 shrink-0">
+                        <div className="flex items-center gap-2.5 shrink-0">
                           {b.status === 'CONFIRMED' || b.status === 'CHECKED_IN' ? (
-                            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              <span>{b.status === 'CHECKED_IN' ? 'Checked In' : 'Confirmed'}</span>
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCheckIn(b)}
+                              className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-bold rounded-lg transition flex items-center gap-1 shadow-sm"
+                            >
+                              <QrCode className="w-3.5 h-3.5" />
+                              <span>{b.status === 'CHECKED_IN' ? 'Verified' : 'Check In'}</span>
+                            </button>
                           ) : (
-                            <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full bg-amber-500" />
-                              <span>Pending</span>
+                            <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                              Pending
                             </span>
                           )}
-                          <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#F58220] transition" />
                         </div>
                       </div>
                     ))
@@ -418,28 +573,29 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* RIGHT COLUMN: My Schedule (This Week) + Recommended for You (5 Cols) */}
+            {/* RIGHT COLUMN: Weekly Schedule + Recommended Facilities (5 Cols) */}
             <div className="lg:col-span-5 space-y-6">
-              {/* My Schedule (This Week) Card (Matching Screenshot 1) */}
-              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+              {/* My Schedule (This Week) Card */}
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
                   <h2 className="text-base font-extrabold text-[#292929]">
-                    My Schedule <span className="text-xs font-normal text-gray-400">(This Week)</span>
+                    Campus Schedule <span className="text-xs font-normal text-gray-400">(This Week)</span>
                   </h2>
                   <Link
                     href="/calendar"
                     className="text-xs font-bold text-[#F58220] hover:text-[#E06D0C] flex items-center gap-1"
                   >
-                    <span>View Calendar</span>
+                    <span>Full Calendar</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </Link>
                 </div>
 
-                {/* Day Selector Buttons */}
+                {/* Day Selector Buttons (Calculated dynamically for current week) */}
                 <div className="flex items-center justify-between gap-1 pb-2 border-b border-gray-100 overflow-x-auto">
                   {daysList.map((d) => (
                     <button
                       key={d.name}
+                      type="button"
                       onClick={() => setSelectedScheduleDay(d.dayOfWeek)}
                       className={`flex flex-col items-center py-1.5 px-2.5 rounded-xl text-xs font-bold transition shrink-0 ${
                         selectedScheduleDay === d.dayOfWeek
@@ -448,119 +604,85 @@ export default function DashboardPage() {
                       }`}
                     >
                       <span className="text-[10px] font-normal uppercase">{d.name}</span>
-                      <span className="text-sm font-extrabold">{d.date}</span>
+                      <span className="text-sm font-extrabold">{d.dateDisplay}</span>
                     </button>
                   ))}
                 </div>
 
-                {/* Vertical Timeline (Matching Screenshot 1) */}
-                <div className="space-y-3 pt-2">
-                  {/* Slot 1: 10:00 AM */}
-                  <div className="flex items-start gap-4">
-                    <span className="text-[11px] font-bold text-gray-400 w-16 pt-1">10:00 AM</span>
-                    <div className="flex-1 p-3 bg-gray-50 border-l-4 border-gray-400 rounded-r-xl text-xs">
-                      <div className="font-bold text-gray-800">DAA Lecture</div>
-                      <div className="text-[11px] text-gray-500 mt-0.5">CSE Block - 204</div>
+                {/* Dynamic Timetable Classes for Selected Day */}
+                <div className="space-y-2.5 pt-1">
+                  {filteredScheduleClasses.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-gray-400 border border-dashed rounded-xl">
+                      No scheduled academic classes for this day. Facilities are open for reservation.
                     </div>
-                  </div>
-
-                  {/* Slot 2: 12:00 PM */}
-                  <div className="flex items-start gap-4">
-                    <span className="text-[11px] font-bold text-gray-400 w-16 pt-1">12:00 PM</span>
-                    <div className="flex-1 p-3 bg-gray-50 border-l-4 border-[#1976B9] rounded-r-xl text-xs flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-gray-800">Club Meeting</div>
-                        <div className="text-[11px] text-gray-500 mt-0.5">Student Activity Center</div>
+                  ) : (
+                    filteredScheduleClasses.map((cls) => (
+                      <div
+                        key={cls.id}
+                        className="p-3 bg-blue-50/60 border-l-4 border-[#1976B9] rounded-r-xl text-xs space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-extrabold text-blue-950">
+                            {cls.courseCode}: {cls.courseName}
+                          </span>
+                          <span className="text-[11px] font-mono text-blue-800 font-bold">
+                            {cls.startTime} - {cls.endTime}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-blue-700 flex items-center justify-between">
+                          <span>{cls.resource?.name || 'Classroom'} ({cls.resource?.building})</span>
+                          <span>{cls.instructorName}</span>
+                        </div>
                       </div>
-                      <Users className="w-4 h-4 text-gray-400" />
-                    </div>
-                  </div>
-
-                  {/* Slot 3: 2:00 PM (Active Orange Highlight) */}
-                  <div className="flex items-start gap-4">
-                    <span className="text-[11px] font-bold text-[#F58220] w-16 pt-1">02:00 PM</span>
-                    <div className="flex-1 p-3 bg-orange-50 border-l-4 border-[#F58220] rounded-r-xl text-xs shadow-sm">
-                      <div className="font-bold text-[#292929]">Project Discussion</div>
-                      <div className="text-[11px] text-[#F58220] mt-0.5 flex items-center gap-1 font-medium">
-                        <MapPin className="w-3 h-3" />
-                        <span>Seminar Hall 2</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Slot 4: 4:00 PM */}
-                  <div className="flex items-start gap-4">
-                    <span className="text-[11px] font-bold text-gray-400 w-16 pt-1">04:00 PM</span>
-                    <div className="flex-1 p-2.5 bg-gray-50/60 rounded-xl text-xs text-gray-400 font-medium border border-dashed border-gray-200">
-                      Free Slot (Available for Booking)
-                    </div>
-                  </div>
+                    ))
+                  )}
                 </div>
               </div>
 
-              {/* Recommended for You Card (Matching Screenshot 1) */}
-              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+              {/* Recommended Facilities Catalog Preview */}
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-base font-extrabold text-[#292929]">Recommended for You</h2>
-                    <p className="text-[11px] text-gray-400">Based on your recent activity and preferences</p>
-                  </div>
+                  <h2 className="text-base font-extrabold text-[#292929]">
+                    Featured Campus Facilities
+                  </h2>
                   <Link
                     href="/resources"
                     className="text-xs font-bold text-[#F58220] hover:text-[#E06D0C] flex items-center gap-1"
                   >
-                    <span>View All</span>
+                    <span>Browse All</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </Link>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {recommendedResources.slice(0, 2).map((res) => (
+                <div className="space-y-3">
+                  {recommendedResources.map((res) => (
                     <div
                       key={res.id}
-                      className="border border-gray-100 rounded-2xl overflow-hidden hover:shadow-md transition flex flex-col justify-between bg-white"
+                      className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between gap-3"
                     >
-                      <div className="relative h-28 w-full bg-gray-200">
+                      <div className="flex items-center gap-3 overflow-hidden">
                         <img
-                          src={res.imageUrl}
+                          src={res.imageUrl || 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=200&q=80'}
                           alt={res.name}
-                          className="w-full h-full object-cover"
+                          className="w-10 h-10 rounded-lg object-cover shrink-0"
                         />
-                        <button className="absolute top-2 right-2 p-1.5 bg-white/80 backdrop-blur rounded-full text-gray-600 hover:text-red-500 shadow transition">
-                          <Heart className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2">
-                        <div>
-                          <div className="font-bold text-xs text-gray-900 truncate">{res.name}</div>
-                          <div className="text-[10px] text-gray-500 flex items-center gap-1 mt-0.5">
-                            <Users className="w-3 h-3 text-gray-400" />
-                            <span>Capacity: {res.capacity}</span>
+                        <div className="overflow-hidden">
+                          <div className="font-bold text-xs text-gray-900 truncate">
+                            {res.name}
                           </div>
-                          <div className="text-[10px] text-gray-400 truncate">{res.building}</div>
+                          <div className="text-[11px] text-gray-500 truncate">
+                            {res.building} • Cap: {res.capacity}
+                          </div>
                         </div>
-
-                        {/* Amenities Tags */}
-                        <div className="flex flex-wrap gap-1">
-                          {res.amenities.slice(0, 2).map((a) => (
-                            <span
-                              key={a}
-                              className="text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-medium"
-                            >
-                              {a}
-                            </span>
-                          ))}
-                        </div>
-
-                        <button
-                          onClick={() => handleOpenBooking(res)}
-                          className="w-full py-1.5 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center justify-center gap-1.5 mt-2"
-                        >
-                          <span>Book Now</span>
-                          <ArrowRight className="w-3 h-3" />
-                        </button>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenBooking(res)}
+                        className="px-3 py-1 bg-white hover:bg-orange-50 border border-gray-200 text-[#F58220] text-xs font-bold rounded-lg transition shrink-0"
+                      >
+                        Reserve
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -575,10 +697,13 @@ export default function DashboardPage() {
         isOpen={isBookingModalOpen}
         onClose={() => setIsBookingModalOpen(false)}
         preselectedResource={selectedResourceForBooking}
+        preselectedDate={bookingPreselectDate}
+        preselectedStartTime={bookingPreselectStartTime}
+        preselectedEndTime={bookingPreselectEndTime}
         onBookingSuccess={() => loadDashboardData()}
       />
 
-      {/* Check-In Modal */}
+      {/* Check In Modal */}
       <CheckInModal
         isOpen={isCheckInModalOpen}
         onClose={() => setIsCheckInModalOpen(false)}
@@ -588,4 +713,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

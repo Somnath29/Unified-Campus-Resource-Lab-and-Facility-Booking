@@ -38,7 +38,10 @@ export function withErrorHandling(
       const msg = String(err?.message || '');
       if (
         err?.code === '23P01' ||
+        err?.code === '40P01' ||
         msg.includes('23P01') ||
+        msg.includes('40P01') ||
+        msg.includes('deadlock detected') ||
         msg.includes('no_overlapping_bookings') ||
         msg.includes('conflicting key value violates exclusion constraint')
       ) {

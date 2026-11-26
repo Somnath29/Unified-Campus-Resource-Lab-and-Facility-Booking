@@ -256,6 +256,25 @@ export class BookingService {
           });
 
           if (overlapping) {
+            if (idempotencyKey) {
+              const existingKey = await tx.idempotencyKey.findUnique({
+                where: {
+                  userId_key: {
+                    userId: user.id,
+                    key: idempotencyKey,
+                  },
+                },
+              });
+              if (existingKey) {
+                const cached = JSON.parse(existingKey.responseBody);
+                return {
+                  booking: cached.booking,
+                  message: cached.message,
+                  isIdempotentReplay: true,
+                };
+              }
+            }
+
             throw new ApiError(
               409,
               `Slot conflict: The selected resource is already booked or reserved during this time window. (Conflicting slot: ${overlapping.startTime.toISOString()} to ${overlapping.endTime.toISOString()})`,
@@ -378,11 +397,39 @@ export class BookingService {
 
       return result;
     } catch (err: any) {
-      // Handle PostgreSQL GiST exclusion constraint error code 23P01
+      // Check if a concurrent request with the same idempotency key already succeeded or is committing
+      if (idempotencyKey) {
+        try {
+          for (let retry = 0; retry < 6; retry++) {
+            const existing = await prisma.idempotencyKey.findUnique({
+              where: {
+                userId_key: {
+                  userId: user.id,
+                  key: idempotencyKey,
+                },
+              },
+            });
+            if (existing) {
+              const cached = JSON.parse(existing.responseBody);
+              return {
+                booking: cached.booking,
+                message: cached.message,
+                isIdempotentReplay: true,
+              };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        } catch {}
+      }
+
+      // Handle PostgreSQL GiST exclusion constraint error code 23P01 or deadlock 40P01
       const msg = String(err?.message || '');
       if (
         err?.code === '23P01' ||
+        err?.code === '40P01' ||
         msg.includes('23P01') ||
+        msg.includes('40P01') ||
+        msg.includes('deadlock detected') ||
         msg.includes('no_overlapping_bookings') ||
         msg.includes('conflicting key value violates exclusion constraint')
       ) {
