@@ -161,3 +161,7 @@ export interface AdminAnalyticsDTO {
   topResources: { name: string; category: string; bookingsCount: number; utilization: number }[];
 }
 
+// State Machine
+export * from './state-machine';
+
+
