@@ -134,9 +134,13 @@ async function setup() {
 
   // Fetch test resources
   testResource = await prisma.resource.findFirst({
+    where: { code: 'CSE-CR-204', requiresApproval: false, deletedAt: null },
+  }) || await prisma.resource.findFirst({
     where: { category: 'CLASSROOM', requiresApproval: false, deletedAt: null },
   });
   approvalRequiredResource = await prisma.resource.findFirst({
+    where: { code: 'CSE-LAB-03', requiresApproval: true, deletedAt: null },
+  }) || await prisma.resource.findFirst({
     where: { requiresApproval: true, deletedAt: null },
   });
 

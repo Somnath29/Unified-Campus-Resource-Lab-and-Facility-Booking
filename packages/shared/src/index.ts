@@ -164,4 +164,8 @@ export interface AdminAnalyticsDTO {
 // State Machine
 export * from './state-machine';
 
+// Resource Discovery, Availability & Calendar Types (R2)
+export * from './resource';
+
+
 

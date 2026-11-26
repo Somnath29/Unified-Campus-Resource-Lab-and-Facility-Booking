@@ -122,3 +122,53 @@ export function validateOperatingHours(
 
   return { valid: true };
 }
+
+/**
+ * Validates strict YYYY-MM-DD calendar date.
+ */
+export function isValidDateString(dateStr: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return (
+    d.getUTCFullYear() === year &&
+    d.getUTCMonth() === month - 1 &&
+    d.getUTCDate() === day
+  );
+}
+
+/**
+ * Validates 24-hour HH:mm time string.
+ */
+export function isValidTimeString(timeStr: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(timeStr);
+}
+
+/**
+ * Converts a date string (YYYY-MM-DD) and time string (HH:mm) in Asia/Kolkata to a UTC Date object.
+ */
+export function kolkataToUtc(dateStr: string, timeStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hour, minute] = timeStr.split(':').map(Number);
+  const utcMillis = Date.UTC(year, month - 1, day, hour, minute) - (5 * 60 + 30) * 60 * 1000;
+  return new Date(utcMillis);
+}
+
+/**
+ * Returns the start of a given calendar day in Asia/Kolkata as a UTC Date (00:00:00.000 IST).
+ */
+export function getKolkataDayStartUtc(dateStr: string): Date {
+  return kolkataToUtc(dateStr, '00:00');
+}
+
+/**
+ * Returns the exclusive upper boundary of a given calendar day in Asia/Kolkata as a UTC Date (next day 00:00:00.000 IST).
+ */
+export function getKolkataDayEndUtc(dateStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const nextDayUtcMillis = Date.UTC(year, month - 1, day + 1, 0, 0) - (5 * 60 + 30) * 60 * 1000;
+  return new Date(nextDayUtcMillis);
+}
+
