@@ -61,11 +61,27 @@ export const api = {
     getStats: () => apiRequest('/dashboard/stats'),
   },
   resources: {
-    list: (params?: Record<string, string>) => {
-      const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
-      return apiRequest(`/resources${qs}`);
+    list: (params?: Record<string, string | number | boolean | undefined>) => {
+      const filteredParams = new URLSearchParams();
+      if (params) {
+        Object.entries(params).forEach(([key, val]) => {
+          if (val !== undefined && val !== null && val !== '') {
+            filteredParams.set(key, String(val));
+          }
+        });
+      }
+      const qs = filteredParams.toString() ? `?${filteredParams.toString()}` : '';
+      return apiRequest<import('@lpu/shared').ResourceListResponse>(`/resources${qs}`);
     },
-    getById: (id: string) => apiRequest(`/resources/${id}`),
+    getById: (id: string) => apiRequest<import('@lpu/shared').ResourceDTO>(`/resources/${id}`),
+    getAvailability: (id: string, date: string) =>
+      apiRequest<import('@lpu/shared').ResourceAvailabilityResponse>(
+        `/resources/${id}/availability?date=${encodeURIComponent(date)}`
+      ),
+    getCalendar: (id: string, from: string, to: string) =>
+      apiRequest<import('@lpu/shared').ResourceCalendarResponse>(
+        `/resources/${id}/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
     smartAllocation: (body: any) => apiRequest('/resources/smart-allocation', { method: 'POST', body: JSON.stringify(body) }),
   },
   timetable: {

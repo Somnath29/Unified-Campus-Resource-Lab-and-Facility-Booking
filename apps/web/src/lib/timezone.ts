@@ -172,3 +172,114 @@ export function getKolkataDayEndUtc(dateStr: string): Date {
   return new Date(nextDayUtcMillis);
 }
 
+/**
+ * Helper to ensure an input is a valid Date object.
+ */
+function toDate(input: Date | string | number): Date {
+  if (input instanceof Date) return input;
+  if (typeof input === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    // If it is a bare calendar date (YYYY-MM-DD), parse as Asia/Kolkata noon to prevent local UTC shift
+    return kolkataToUtc(input, '12:00');
+  }
+  return new Date(input);
+}
+
+/**
+ * Returns current date string in Asia/Kolkata (YYYY-MM-DD).
+ */
+export function getCurrentKolkataDateString(): string {
+  return getDateStringInKolkata(new Date());
+}
+
+/**
+ * Returns current time string in Asia/Kolkata (HH:mm).
+ */
+export function getCurrentKolkataTimeString(): string {
+  return getTimeStringInKolkata(new Date());
+}
+
+/**
+ * Adds or subtracts days to a YYYY-MM-DD string in Asia/Kolkata, returning a new YYYY-MM-DD string.
+ */
+export function addDaysKolkata(dateStr: string, days: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dayOfMonth = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${dayOfMonth}`;
+}
+
+/**
+ * Formats a date in Asia/Kolkata (e.g. "01 Dec 2026" or "Tuesday, 01 Dec 2026").
+ */
+export function formatKolkataDate(
+  dateInput: Date | string | number,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  const d = toDate(dateInput);
+  const defaultOptions: Intl.DateTimeFormatOptions = {
+    timeZone: APP_TIMEZONE,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  };
+  return new Intl.DateTimeFormat('en-IN', { ...defaultOptions, ...options }).format(d);
+}
+
+/**
+ * Formats a time in Asia/Kolkata (e.g. "10:00 AM" or "02:30 PM").
+ */
+export function formatKolkataTime(dateInput: Date | string | number): string {
+  const d = toDate(dateInput);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TIMEZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d);
+}
+
+/**
+ * Formats a full date and time in Asia/Kolkata (e.g. "01 Dec 2026, 10:00 AM").
+ */
+export function formatKolkataDateTime(dateInput: Date | string | number): string {
+  const d = toDate(dateInput);
+  const datePart = formatKolkataDate(d);
+  const timePart = formatKolkataTime(d);
+  return `${datePart}, ${timePart}`;
+}
+
+/**
+ * Formats a time range in Asia/Kolkata (e.g. "10:00 AM - 11:30 AM").
+ */
+export function formatKolkataTimeRange(
+  startInput: Date | string | number,
+  endInput: Date | string | number
+): string {
+  return `${formatKolkataTime(startInput)} - ${formatKolkataTime(endInput)}`;
+}
+
+/**
+ * Converts a 24-hour time string ("14:00" or "08:30") to 12-hour format ("02:00 PM" or "08:30 AM").
+ */
+export function formatSlotTime12Hour(time24: string): string {
+  if (!time24) return '';
+  const [hourStr, minStr] = time24.split(':');
+  let hour = parseInt(hourStr, 10);
+  const minute = minStr || '00';
+  if (isNaN(hour)) return time24;
+  const modifier = hour >= 12 ? 'PM' : 'AM';
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  return `${String(hour).padStart(2, '0')}:${minute} ${modifier}`;
+}
+
+/**
+ * Formats slot start and end times ("08:00", "08:30") into readable 12-hour range ("08:00 AM - 08:30 AM").
+ */
+export function formatSlotTimeRange(startTime: string, endTime: string): string {
+  return `${formatSlotTime12Hour(startTime)} - ${formatSlotTime12Hour(endTime)}`;
+}
+
+

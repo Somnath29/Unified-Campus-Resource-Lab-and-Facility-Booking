@@ -9,6 +9,9 @@ interface BookingModalProps {
   isOpen: boolean;
   onClose: () => void;
   preselectedResource?: ResourceDTO | null;
+  preselectedDate?: string;
+  preselectedStartTime?: string;
+  preselectedEndTime?: string;
   onBookingSuccess?: () => void;
 }
 
@@ -16,6 +19,9 @@ export function BookingModal({
   isOpen,
   onClose,
   preselectedResource,
+  preselectedDate,
+  preselectedStartTime,
+  preselectedEndTime,
   onBookingSuccess,
 }: BookingModalProps) {
   const [resources, setResources] = useState<ResourceDTO[]>([]);
@@ -46,8 +52,17 @@ export function BookingModal({
           }
         });
       }
+      if (preselectedDate) {
+        setDate(preselectedDate);
+      }
+      if (preselectedStartTime) {
+        setStartTime(preselectedStartTime);
+      }
+      if (preselectedEndTime) {
+        setEndTime(preselectedEndTime);
+      }
     }
-  }, [isOpen, preselectedResource]);
+  }, [isOpen, preselectedResource, preselectedDate, preselectedStartTime, preselectedEndTime]);
 
   if (!isOpen) return null;
 
