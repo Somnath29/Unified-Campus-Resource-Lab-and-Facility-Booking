@@ -82,6 +82,10 @@ export const api = {
       apiRequest<import('@lpu/shared').ResourceCalendarResponse>(
         `/resources/${id}/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
       ),
+    recommendations: (params?: Record<string, any>) => {
+      const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
+      return apiRequest<import('@lpu/shared').ResourceRecommendationResponse>(`/resources/recommendations${qs}`);
+    },
     smartAllocation: (body: any) => apiRequest('/resources/smart-allocation', { method: 'POST', body: JSON.stringify(body) }),
   },
   timetable: {
@@ -91,6 +95,11 @@ export const api = {
     },
   },
   bookings: {
+    preview: (body: import('@lpu/shared').BookingPreviewRequest) =>
+      apiRequest<import('@lpu/shared').BookingPreviewResponse>('/bookings/preview', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     create: (body: any, idempotencyKey?: string) =>
       apiRequest('/bookings', {
         method: 'POST',

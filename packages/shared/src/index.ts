@@ -167,5 +167,9 @@ export * from './state-machine';
 // Resource Discovery, Availability & Calendar Types (R2)
 export * from './resource';
 
+// Booking Preview, Dashboard & Smart Allocation Types (R4)
+export * from './booking';
+
+
 
 

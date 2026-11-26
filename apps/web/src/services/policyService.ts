@@ -6,6 +6,9 @@ export interface PolicyDecision {
   initialStatus: BookingStatus;
   reason?: string;
   autoReleaseMinutes: number;
+  remainingWeeklyQuota?: number;
+  maxWeeklyHours?: number;
+  currentWeeklyHours?: number;
 }
 
 export interface EvaluatePolicyParams {
@@ -25,6 +28,71 @@ export interface EvaluatePolicyParams {
   startTime: Date;
   endTime: Date;
   prisma: any; // PrismaClient or TransactionClient
+}
+
+/**
+ * Retrieves the remaining weekly quota and active booked hours for a user in Asia/Kolkata calendar week.
+ */
+export async function getWeeklyQuotaUsage({
+  user,
+  department,
+  date,
+  prisma,
+}: {
+  user: { id: string; role: Role };
+  department?: string;
+  date: Date;
+  prisma: any;
+}): Promise<{ currentWeeklyHours: number; maxWeeklyHours: number; remainingWeeklyQuota: number }> {
+  let maxWeeklyHours = 20;
+  if (department) {
+    const policy = await prisma.departmentPolicy.findUnique({
+      where: { department },
+    });
+    if (policy?.maxBookingHoursPerWeek) {
+      maxWeeklyHours = policy.maxBookingHoursPerWeek;
+    }
+  }
+
+  if (user.role !== Role.STUDENT) {
+    return {
+      currentWeeklyHours: 0,
+      maxWeeklyHours: 999,
+      remainingWeeklyQuota: 999,
+    };
+  }
+
+  const { weekStart, weekEnd } = getWeekRange(date);
+  const activeBookings = await prisma.booking.findMany({
+    where: {
+      userId: user.id,
+      status: {
+        in: [
+          BookingStatus.PENDING,
+          BookingStatus.APPROVED,
+          BookingStatus.CONFIRMED,
+          BookingStatus.CHECKED_IN,
+        ],
+      },
+      startTime: { gte: weekStart, lte: weekEnd },
+    },
+    select: {
+      startTime: true,
+      endTime: true,
+    },
+  });
+
+  let currentWeeklyHours = 0;
+  for (const b of activeBookings) {
+    currentWeeklyHours += (b.endTime.getTime() - b.startTime.getTime()) / (1000 * 60 * 60);
+  }
+
+  const remainingWeeklyQuota = Math.max(0, parseFloat((maxWeeklyHours - currentWeeklyHours).toFixed(1)));
+  return {
+    currentWeeklyHours: parseFloat(currentWeeklyHours.toFixed(1)),
+    maxWeeklyHours,
+    remainingWeeklyQuota,
+  };
 }
 
 /**
@@ -67,6 +135,14 @@ export async function evaluateBookingPolicy({
 
   const durationHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
 
+  // Compute user quota usage
+  const quota = await getWeeklyQuotaUsage({
+    user,
+    department: resource.department,
+    date: startTime,
+    prisma,
+  });
+
   // 2. Blackout Periods Validation
   if (policy?.blackoutPeriods) {
     try {
@@ -86,6 +162,9 @@ export async function evaluateBookingPolicy({
             initialStatus: BookingStatus.REJECTED,
             reason: `Requested time slot overlaps department blackout period: ${b.reason || 'Scheduled maintenance/event'}.`,
             autoReleaseMinutes,
+            remainingWeeklyQuota: quota.remainingWeeklyQuota,
+            maxWeeklyHours: quota.maxWeeklyHours,
+            currentWeeklyHours: quota.currentWeeklyHours,
           };
         }
       }
@@ -106,6 +185,9 @@ export async function evaluateBookingPolicy({
       initialStatus: BookingStatus.REJECTED,
       reason: `Booking exceeds maximum advance reservation window of ${maxAdvanceDays} days for ${resource.department}.`,
       autoReleaseMinutes,
+      remainingWeeklyQuota: quota.remainingWeeklyQuota,
+      maxWeeklyHours: quota.maxWeeklyHours,
+      currentWeeklyHours: quota.currentWeeklyHours,
     };
   }
 
@@ -128,44 +210,25 @@ export async function evaluateBookingPolicy({
         reason:
           'Booking privileges are temporarily restricted due to 3 or more unexcused no-shows in the past 30 days.',
         autoReleaseMinutes,
+        remainingWeeklyQuota: quota.remainingWeeklyQuota,
+        maxWeeklyHours: quota.maxWeeklyHours,
+        currentWeeklyHours: quota.currentWeeklyHours,
       };
     }
   }
 
   // 5. Weekly Booking Quota Validation (for Students)
   if (user.role === Role.STUDENT) {
-    const { weekStart, weekEnd } = getWeekRange(startTime);
-    const activeBookings = await prisma.booking.findMany({
-      where: {
-        userId: user.id,
-        status: {
-          in: [
-            BookingStatus.PENDING,
-            BookingStatus.APPROVED,
-            BookingStatus.CONFIRMED,
-            BookingStatus.CHECKED_IN,
-          ],
-        },
-        startTime: { gte: weekStart, lte: weekEnd },
-      },
-      select: {
-        startTime: true,
-        endTime: true,
-      },
-    });
-
-    let currentWeekHours = 0;
-    for (const b of activeBookings) {
-      currentWeekHours += (b.endTime.getTime() - b.startTime.getTime()) / (1000 * 60 * 60);
-    }
-
-    if (currentWeekHours + durationHours > maxWeeklyHours) {
+    if (quota.currentWeeklyHours + durationHours > quota.maxWeeklyHours) {
       return {
         allowed: false,
         requiresApproval: true,
         initialStatus: BookingStatus.REJECTED,
-        reason: `Weekly booking quota of ${maxWeeklyHours} hours exceeded (currently reserved: ${currentWeekHours.toFixed(1)}h, requested: ${durationHours.toFixed(1)}h).`,
+        reason: `Weekly booking quota of ${quota.maxWeeklyHours} hours exceeded (currently reserved: ${quota.currentWeeklyHours.toFixed(1)}h, requested: ${durationHours.toFixed(1)}h).`,
         autoReleaseMinutes,
+        remainingWeeklyQuota: quota.remainingWeeklyQuota,
+        maxWeeklyHours: quota.maxWeeklyHours,
+        currentWeeklyHours: quota.currentWeeklyHours,
       };
     }
   }
@@ -177,6 +240,9 @@ export async function evaluateBookingPolicy({
       requiresApproval: false,
       initialStatus: BookingStatus.CONFIRMED,
       autoReleaseMinutes,
+      remainingWeeklyQuota: quota.remainingWeeklyQuota,
+      maxWeeklyHours: quota.maxWeeklyHours,
+      currentWeeklyHours: quota.currentWeeklyHours,
     };
   }
 
@@ -186,7 +252,11 @@ export async function evaluateBookingPolicy({
       allowed: true,
       requiresApproval: true,
       initialStatus: BookingStatus.PENDING,
+      reason: 'This facility requires department approver review and approval before confirmation.',
       autoReleaseMinutes,
+      remainingWeeklyQuota: quota.remainingWeeklyQuota,
+      maxWeeklyHours: quota.maxWeeklyHours,
+      currentWeeklyHours: quota.currentWeeklyHours,
     };
   }
 
@@ -197,6 +267,9 @@ export async function evaluateBookingPolicy({
       initialStatus: BookingStatus.PENDING,
       reason: `Bookings longer than ${autoApproveStudentHours} hours require department approver endorsement.`,
       autoReleaseMinutes,
+      remainingWeeklyQuota: quota.remainingWeeklyQuota,
+      maxWeeklyHours: quota.maxWeeklyHours,
+      currentWeeklyHours: quota.currentWeeklyHours,
     };
   }
 
@@ -205,5 +278,8 @@ export async function evaluateBookingPolicy({
     requiresApproval: false,
     initialStatus: BookingStatus.CONFIRMED,
     autoReleaseMinutes,
+    remainingWeeklyQuota: quota.remainingWeeklyQuota,
+    maxWeeklyHours: quota.maxWeeklyHours,
+    currentWeeklyHours: quota.currentWeeklyHours,
   };
 }
