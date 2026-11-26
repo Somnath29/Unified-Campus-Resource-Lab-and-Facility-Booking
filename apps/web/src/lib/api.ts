@@ -104,6 +104,13 @@ export const api = {
     addComment: (id: string, body: { body: string; isInternal?: boolean }) => apiRequest<any>(`/approvals/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
     getCompeting: (id: string) => apiRequest<any>(`/approvals/${id}/competing`),
     getAlternatives: (id: string) => apiRequest<any>(`/approvals/${id}/alternatives`),
+    getPreemptionCandidates: (id: string) => apiRequest<any>(`/approvals/${id}/preemption-candidates`),
+    requestPreemption: (id: string, body: { bumpedBookingId: string; reason: string }) =>
+      apiRequest<any>(`/approvals/${id}/preempt`, { method: 'POST', body: JSON.stringify(body) }),
+    confirmFacultyPreemption: (recordId: string, body: { approved: boolean; adminNotes?: string }) =>
+      apiRequest<any>(`/approvals/preemption/${recordId}/admin-confirm`, { method: 'POST', body: JSON.stringify(body) }),
+    undoPreemption: (recordId: string, body: { undoReason: string }) =>
+      apiRequest<any>(`/approvals/preemption/${recordId}/undo`, { method: 'POST', body: JSON.stringify(body) }),
   },
   checkin: {
     verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),

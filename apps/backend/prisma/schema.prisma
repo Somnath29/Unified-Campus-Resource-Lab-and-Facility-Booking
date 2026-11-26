@@ -75,6 +75,9 @@ model User {
   delegationsTo       Delegation[]         @relation("DelegationsTo")
   notifications       Notification[]
   auditLogs           AuditLog[]
+  waitlistEntries     WaitlistEntry[]
+  preemptionsInitiated PreemptionRecord[] @relation("PreemptionInitiatedBy")
+  preemptionsAdminConfirmed PreemptionRecord[] @relation("PreemptionAdminConfirmedBy")
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 }
@@ -125,6 +128,7 @@ model Resource {
   operatingHours     String           @default("08:00 AM - 08:00 PM")
   bookings           Booking[]
   timetableEntries   TimetableEntry[]
+  waitlistEntries    WaitlistEntry[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 }
@@ -157,6 +161,9 @@ model Booking {
   slaDueAt           DateTime?
   comments           BookingComment[]
   approvalDecisions  ApprovalDecision[]
+  waitlistEntries    WaitlistEntry[]
+  preemptedAsTarget  PreemptionRecord[] @relation("PreemptionTargetBooking")
+  preemptedAsBumped  PreemptionRecord[] @relation("PreemptionBumpedBooking")
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -265,3 +272,54 @@ model AuditLog {
   createdAt  DateTime @default(now())
 }
 
+enum PreemptionStatus {
+  PENDING_ADMIN_CONFIRMATION
+  COMPLETED
+  REJECTED
+  UNDONE
+}
+
+model PreemptionRecord {
+  id                             String           @id @default(uuid())
+  targetBookingId                String
+  targetBooking                  Booking          @relation("PreemptionTargetBooking", fields: [targetBookingId], references: [id], onDelete: Cascade)
+  bumpedBookingId                String
+  bumpedBooking                  Booking          @relation("PreemptionBumpedBooking", fields: [bumpedBookingId], references: [id], onDelete: Cascade)
+  initiatorId                    String
+  initiator                      User             @relation("PreemptionInitiatedBy", fields: [initiatorId], references: [id], onDelete: Cascade)
+  reason                         String
+  requiresAdminConfirmation        Boolean          @default(false)
+  adminApproverId                String?
+  adminApprover                  User?            @relation("PreemptionAdminConfirmedBy", fields: [adminApproverId], references: [id], onDelete: SetNull)
+  adminConfirmedAt               DateTime?
+  status                         PreemptionStatus @default(COMPLETED)
+  canUndoUntil                   DateTime?
+  undoneAt                       DateTime?
+  undoneById                     String?
+  undoReason                     String?
+  bumpedOriginalCheckInToken     String?
+  bumpedOriginalReleaseDeadline DateTime?
+  createdAt                      DateTime         @default(now())
+  updatedAt                      DateTime         @updatedAt
+
+  @@index([targetBookingId])
+  @@index([bumpedBookingId])
+  @@index([status])
+}
+
+model WaitlistEntry {
+  id         String   @id @default(uuid())
+  bookingId  String
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  priority   Int      @default(0) // Higher = served first (e.g., 100 for bumped bookings)
+  reason     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([resourceId, priority])
+  @@index([userId])
+}

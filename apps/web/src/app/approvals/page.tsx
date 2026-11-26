@@ -89,21 +89,30 @@ export default function ApprovalsPage() {
   const [drawerBookingId, setDrawerBookingId] = useState<string | null>(null);
   const [drawerDetails, setDrawerDetails] = useState<any>(null);
   const [isLoadingDrawer, setIsLoadingDrawer] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<'OVERVIEW' | 'TIMELINE' | 'ALTERNATIVES' | 'POLICY_COMMENTS'>('OVERVIEW');
+  const [drawerTab, setDrawerTab] = useState<'OVERVIEW' | 'TIMELINE' | 'ALTERNATIVES' | 'PREEMPTION' | 'POLICY_COMMENTS'>('OVERVIEW');
   const [drawerTimetable, setDrawerTimetable] = useState<any[]>([]);
   const [drawerNeighbours, setDrawerNeighbours] = useState<any[]>([]);
   const [drawerAlternatives, setDrawerAlternatives] = useState<any>(null);
+  const [drawerPreemption, setDrawerPreemption] = useState<any>(null);
   const [isLoadingAlternatives, setIsLoadingAlternatives] = useState(false);
+  const [isLoadingPreemption, setIsLoadingPreemption] = useState(false);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
+  const [recentPreemption, setRecentPreemption] = useState<any>(null);
+  const [undoTimeRemaining, setUndoTimeRemaining] = useState<number | null>(null);
+  const [isUndoing, setIsUndoing] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [isInternalComment, setIsInternalComment] = useState(false);
   const [isPostingComment, setIsPostingComment] = useState(false);
 
   // Decision Modals State
   const [actionModal, setActionModal] = useState<{
-    type: 'APPROVE' | 'REJECT' | 'MODIFY' | 'REQUEST_INFO' | 'BULK_APPROVE' | 'BULK_REJECT';
+    type: 'APPROVE' | 'REJECT' | 'MODIFY' | 'REQUEST_INFO' | 'PREEMPT' | 'BULK_APPROVE' | 'BULK_REJECT';
     booking?: EnrichedApprovalItemDTO;
+    targetBumpedBooking?: any;
   } | null>(null);
+
+  // Action Form Inputs
+  const [preemptReason, setPreemptReason] = useState('');
 
   // Action Form Inputs
   const [approveNotes, setApproveNotes] = useState('');
@@ -268,6 +277,14 @@ export default function ApprovalsPage() {
         .then((altData) => setDrawerAlternatives(altData))
         .catch((e) => console.error('Failed to load alternative suggestions:', e))
         .finally(() => setIsLoadingAlternatives(false));
+
+      // 4. Fetch Pre-emption Candidates (P6)
+      setIsLoadingPreemption(true);
+      api.approvals
+        .getPreemptionCandidates(id)
+        .then((candData) => setDrawerPreemption(candData))
+        .catch((e) => console.error('Failed to load pre-emption candidates:', e))
+        .finally(() => setIsLoadingPreemption(false));
     } catch (err: any) {
       showToast('error', err.message || 'Failed to load booking details.', 'Error');
     } finally {
@@ -286,6 +303,7 @@ export default function ApprovalsPage() {
     setDrawerTimetable([]);
     setDrawerNeighbours([]);
     setDrawerAlternatives(null);
+    setDrawerPreemption(null);
   };
 
   // --------------------------------------------------------------------------
@@ -574,6 +592,89 @@ export default function ApprovalsPage() {
       setActionModal(null);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Pre-emption Handlers (P6)
+  // --------------------------------------------------------------------------
+  const handlePreemptSubmit = async () => {
+    if (!actionModal?.booking || !actionModal.targetBumpedBooking) return;
+    if (preemptReason.trim().length < 10) {
+      showToast('error', 'Pre-emption reason must be at least 10 characters long.', 'Validation Error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await api.approvals.requestPreemption(actionModal.booking.id, {
+        bumpedBookingId: actionModal.targetBumpedBooking.id,
+        reason: preemptReason.trim(),
+      });
+
+      if (res.requiresAdminConfirmation) {
+        showToast(
+          'info',
+          'Faculty booking detected: Pre-emption submitted for mandatory Administrator confirmation.',
+          'Awaiting Admin Review'
+        );
+      } else {
+        showToast(
+          'success',
+          `Pre-emption executed: ${actionModal.booking.bookingNumber} confirmed; bumped user placed #1 on waitlist.`,
+          'Pre-emption Completed'
+        );
+        setRecentPreemption(res.preemptionRecord);
+        setUndoTimeRemaining(300); // 5 minutes in seconds
+      }
+
+      setActionModal(null);
+      setPreemptReason('');
+      fetchStats();
+      fetchRequests();
+      if (drawerBookingId) {
+        fetchDrawerDetails(drawerBookingId);
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Failed to execute pre-emption.', 'Pre-emption Error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Undo Timer countdown effect
+  useEffect(() => {
+    if (!recentPreemption || undoTimeRemaining === null || undoTimeRemaining <= 0) return;
+    const interval = setInterval(() => {
+      setUndoTimeRemaining((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [recentPreemption, undoTimeRemaining]);
+
+  const handleUndoPreemption = async (recordId: string) => {
+    setIsUndoing(true);
+    try {
+      await api.approvals.undoPreemption(recordId, {
+        undoReason: 'Approver invoked safety window undo.',
+      });
+      showToast('success', 'Pre-emption action successfully undone and bookings restored.', 'Pre-emption Undone');
+      setRecentPreemption(null);
+      setUndoTimeRemaining(null);
+      fetchStats();
+      fetchRequests();
+      if (drawerBookingId) {
+        fetchDrawerDetails(drawerBookingId);
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Failed to undo pre-emption.', 'Undo Failed');
+    } finally {
+      setIsUndoing(false);
     }
   };
 
@@ -1699,6 +1800,22 @@ export default function ApprovalsPage() {
                 )}
               </button>
               <button
+                onClick={() => setDrawerTab('PREEMPTION')}
+                className={`pb-2.5 transition border-b-2 flex items-center gap-1.5 ${
+                  drawerTab === 'PREEMPTION'
+                    ? 'border-[#F58220] text-[#F58220]'
+                    : 'border-transparent hover:text-gray-900'
+                }`}
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
+                <span>Priority & Pre-emption</span>
+                {drawerPreemption?.candidates && drawerPreemption.candidates.length > 0 && (
+                  <span className="bg-red-100 text-red-700 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    {drawerPreemption.candidates.length}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setDrawerTab('POLICY_COMMENTS')}
                 className={`pb-2.5 transition border-b-2 ${
                   drawerTab === 'POLICY_COMMENTS'
@@ -2211,6 +2328,163 @@ export default function ApprovalsPage() {
                                   <Edit3 className="w-3.5 h-3.5" />
                                   <span>Use Slot</span>
                                 </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB: PRIORITY & CONTROLLED PRE-EMPTION (P6) */}
+                  {drawerTab === 'PREEMPTION' && (
+                    <div className="space-y-6">
+                      {/* Active Preemption Undo Banner */}
+                      {recentPreemption && undoTimeRemaining !== null && undoTimeRemaining > 0 && (
+                        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between gap-3 animate-in fade-in">
+                          <div className="text-xs">
+                            <span className="font-extrabold text-emerald-900">Pre-emption Active:</span>{' '}
+                            <span className="text-emerald-800">
+                              Undo safety window closes in{' '}
+                              <strong>{Math.floor(undoTimeRemaining / 60)}m {undoTimeRemaining % 60}s</strong>.
+                            </span>
+                          </div>
+                          <button
+                            disabled={isUndoing}
+                            onClick={() => handleUndoPreemption(recentPreemption.id)}
+                            className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-800 font-bold text-xs rounded-xl hover:bg-emerald-100 transition shadow-xs flex items-center gap-1 shrink-0"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isUndoing ? 'animate-spin' : ''}`} />
+                            <span>{isUndoing ? 'Undoing...' : 'Undo Pre-emption'}</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Urgent Request Priority Breakdown */}
+                      <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 space-y-2">
+                        <div className="text-[11px] font-black uppercase text-gray-600 tracking-wider flex items-center justify-between">
+                          <span>Request Priority Diagnostic</span>
+                          <span className="font-mono text-xs font-bold text-[#F58220]">
+                            Score: {drawerPreemption?.urgentScore || 0} pts
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex justify-between py-1 border-b border-gray-200">
+                            <span className="text-gray-500">Activity Classification:</span>
+                            <span className="font-bold text-gray-900">{drawerDetails.activityType}</span>
+                          </div>
+                          <div className="flex justify-between py-1 border-b border-gray-200">
+                            <span className="text-gray-500">Priority Level:</span>
+                            <span className={`font-bold ${drawerDetails.priority === 'URGENT' ? 'text-red-600' : 'text-gray-900'}`}>
+                              {drawerDetails.priority}
+                            </span>
+                          </div>
+                          <div className="flex justify-between py-1 border-b border-gray-200">
+                            <span className="text-gray-500">Requester Rank:</span>
+                            <span className="font-bold text-gray-900">{drawerDetails.user?.role}</span>
+                          </div>
+                          <div className="flex justify-between py-1 border-b border-gray-200">
+                            <span className="text-gray-500">Pre-emption Eligibility:</span>
+                            <span className="font-bold text-emerald-600">
+                              {drawerDetails.priority === 'URGENT' || drawerDetails.activityType === 'EXAM_EVALUATION'
+                                ? 'Eligible for pre-emption'
+                                : 'Standard priority queue'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Confirmed Overlapping Bookings & Pre-emption Candidates */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-black uppercase text-gray-600 tracking-wider flex items-center gap-1.5">
+                            <ShieldAlert className="w-4 h-4 text-red-600" />
+                            <span>Overlapping Confirmed Reservations ({drawerPreemption?.candidates?.length || 0})</span>
+                          </div>
+                          <span className="text-[10px] text-gray-400">Strict Centralized Priority Engine</span>
+                        </div>
+
+                        {isLoadingPreemption ? (
+                          <div className="p-8 text-center text-xs text-gray-400 bg-[#FAF9F6] rounded-2xl border border-gray-200">
+                            <div className="w-5 h-5 border-2 border-[#F58220] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                            Evaluating priority hierarchy and checked-in locks...
+                          </div>
+                        ) : !drawerPreemption?.candidates || drawerPreemption.candidates.length === 0 ? (
+                          <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>No confirmed bookings overlap with this request. Normal approval can proceed.</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {drawerPreemption.candidates.map((cand: any) => (
+                              <div
+                                key={cand.id}
+                                className={`p-4 rounded-2xl border transition space-y-3 ${
+                                  cand.status === 'CHECKED_IN'
+                                    ? 'bg-gray-50 border-gray-200 opacity-70'
+                                    : cand.qualifies
+                                    ? 'bg-red-50/40 border-red-200'
+                                    : 'bg-gray-50 border-gray-200'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-extrabold text-sm text-gray-900">
+                                        #{cand.bookingNumber}
+                                      </span>
+                                      <span className="text-xs text-gray-600 font-medium">
+                                        {cand.requesterName}
+                                      </span>
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
+                                        {cand.requesterRole}
+                                      </span>
+                                      <span
+                                        className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                                          cand.status === 'CHECKED_IN'
+                                            ? 'bg-blue-100 text-blue-800'
+                                            : 'bg-emerald-100 text-emerald-800'
+                                        }`}
+                                      >
+                                        {cand.status}
+                                      </span>
+                                      {cand.requiresAdminConfirmation && (
+                                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
+                                          FACULTY PROTECTION
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1 truncate max-w-md">
+                                      Purpose: {cand.purpose}
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 mt-0.5">
+                                      Slot: {new Date(cand.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
+                                      {new Date(cand.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Score: {cand.priorityScore} pts
+                                    </div>
+                                  </div>
+
+                                  {cand.qualifies && (
+                                    <button
+                                      onClick={() => {
+                                        setPreemptReason('');
+                                        setActionModal({
+                                          type: 'PREEMPT',
+                                          booking: drawerDetails,
+                                          targetBumpedBooking: cand,
+                                        });
+                                      }}
+                                      className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs transition shrink-0 flex items-center gap-1.5"
+                                    >
+                                      <ShieldAlert className="w-3.5 h-3.5" />
+                                      <span>Request Pre-emption</span>
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="p-2.5 bg-white/80 rounded-xl border border-gray-100 text-xs flex items-center gap-2">
+                                  <Info className="w-4 h-4 text-gray-500 shrink-0" />
+                                  <span className="text-gray-700">{cand.qualificationReason}</span>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -2746,6 +3020,103 @@ export default function ApprovalsPage() {
                 className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-40"
               >
                 {isSubmitting ? 'Sending...' : 'Send Clarification Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONTROLLED PRE-EMPTION CONFIRMATION (P6) */}
+      {actionModal?.type === 'PREEMPT' && actionModal.booking && actionModal.targetBumpedBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-2xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center shrink-0 border border-red-100">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-gray-900">
+                  Confirm Controlled Pre-emption
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Confirm priority pre-emption of reservation #{actionModal.targetBumpedBooking.bookingNumber} for urgent request #{actionModal.booking.bookingNumber}.
+                </p>
+              </div>
+            </div>
+
+            {/* Impact Details Card */}
+            <div className="p-3.5 bg-red-50/50 rounded-2xl border border-red-200 text-xs space-y-2">
+              <div className="font-extrabold text-red-950 flex items-center justify-between">
+                <span>Affected Reservation to be Bumped:</span>
+                <span className="font-mono">#{actionModal.targetBumpedBooking.bookingNumber}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-gray-700">
+                <div>
+                  <span className="text-gray-400">Requester:</span>{' '}
+                  <strong>{actionModal.targetBumpedBooking.requesterName}</strong> ({actionModal.targetBumpedBooking.requesterRole})
+                </div>
+                <div>
+                  <span className="text-gray-400">Current Status:</span>{' '}
+                  <strong className="text-emerald-700">{actionModal.targetBumpedBooking.status}</strong>
+                </div>
+              </div>
+
+              {actionModal.targetBumpedBooking.requiresAdminConfirmation && (
+                <div className="p-2.5 bg-purple-50 border border-purple-200 rounded-xl text-[11px] text-purple-900 space-y-1">
+                  <span className="font-extrabold flex items-center gap-1">
+                    <ShieldAlert className="w-3.5 h-3.5 text-purple-700" />
+                    <span>Faculty Protection Protocol Triggered</span>
+                  </span>
+                  <p>
+                    Because this reservation belongs to a faculty member, pre-emption cannot complete immediately. It will be routed to an Administrator for a mandatory second confirmation.
+                  </p>
+                </div>
+              )}
+
+              <div className="text-[11px] text-gray-600 bg-white/80 p-2 rounded-xl border border-red-100">
+                <strong>Waitlist Guarantee:</strong> Upon pre-emption, the bumped reservation will automatically be placed as <strong>#1 Top Priority (score: 100)</strong> on the alternative resource allocation waitlist.
+              </div>
+            </div>
+
+            {/* Pre-emption Reason */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-gray-700">
+                  Pre-emption Justification Reason *
+                </label>
+                <span
+                  className={`text-[10px] font-bold ${
+                    preemptReason.trim().length >= 10 ? 'text-emerald-600' : 'text-red-500'
+                  }`}
+                >
+                  {preemptReason.trim().length}/10 min chars
+                </span>
+              </div>
+              <textarea
+                required
+                value={preemptReason}
+                onChange={(e) => setPreemptReason(e.target.value)}
+                placeholder="State institutional reason (e.g., Mandatory university accreditation exam evaluation)..."
+                rows={3}
+                className="w-full p-3 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handlePreemptSubmit}
+                disabled={isSubmitting || preemptReason.trim().length < 10}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-40"
+              >
+                {isSubmitting ? 'Processing...' : 'Confirm Pre-emption'}
               </button>
             </div>
           </div>

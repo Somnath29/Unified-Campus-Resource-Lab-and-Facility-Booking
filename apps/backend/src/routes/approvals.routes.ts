@@ -11,6 +11,13 @@ import {
   getCompetingBookings,
   getAlternativeSuggestions,
 } from '../services/alternativeSuggestion.service';
+import {
+  calculatePriorityScore,
+  getPreemptionCandidates,
+  executePreemption,
+  confirmFacultyPreemptionByAdmin,
+  undoPreemption,
+} from '../services/preemption.service';
 
 import { AuthenticatedUser } from '../middleware/auth';
 
@@ -125,8 +132,17 @@ async function enrichBooking(booking: any) {
     });
   }
 
+  // 5. Centralized Priority Score (P6)
+  const priorityScore = calculatePriorityScore({
+    priority: booking.priority,
+    activityType: booking.activityType,
+    userRole: booking.user?.role,
+    submittedAt: booking.submittedAt,
+  });
+
   return {
     ...booking,
+    priorityScore,
     requesterSummary: {
       role: booking.user?.role || Role.STUDENT,
       recentNoShowCount,
@@ -606,6 +622,120 @@ router.get(
       }
       console.error('Error calculating alternative suggestions:', err);
       return res.status(500).json({ error: 'Failed to generate alternative suggestions.' });
+    }
+  }
+);
+
+// ============================================================================
+// 8. GET /api/approvals/:id/preemption-candidates (P6)
+// ============================================================================
+router.get(
+  '/:id/preemption-candidates',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const approver = req.user!;
+      const result = await getPreemptionCandidates(id, approver);
+      return res.json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error fetching pre-emption candidates:', err);
+      return res.status(500).json({ error: 'Failed to retrieve pre-emption candidates.' });
+    }
+  }
+);
+
+// ============================================================================
+// 9. POST /api/approvals/:id/preempt - Execute Controlled Pre-emption (P6)
+// ============================================================================
+router.post(
+  '/:id/preempt',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { bumpedBookingId, reason } = req.body;
+      const approver = req.user!;
+
+      if (!bumpedBookingId) {
+        return res.status(400).json({ error: 'bumpedBookingId is required.' });
+      }
+
+      const result = await executePreemption({
+        urgentBookingId: id,
+        bumpedBookingId,
+        approver,
+        reason,
+      });
+
+      return res.json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error executing pre-emption:', err);
+      return res.status(500).json({ error: 'Failed to process pre-emption request.' });
+    }
+  }
+);
+
+// ============================================================================
+// 10. POST /api/approvals/preemption/:recordId/admin-confirm - Administrator Confirmation (P6)
+// ============================================================================
+router.post(
+  '/preemption/:recordId/admin-confirm',
+  authenticateToken,
+  requireRole(Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { recordId } = req.params;
+      const { approved = true, adminNotes } = req.body;
+      const adminUser = req.user!;
+
+      const result = await confirmFacultyPreemptionByAdmin(
+        recordId,
+        adminUser,
+        Boolean(approved),
+        adminNotes
+      );
+
+      return res.json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error confirming faculty pre-emption:', err);
+      return res.status(500).json({ error: 'Failed to confirm faculty pre-emption.' });
+    }
+  }
+);
+
+// ============================================================================
+// 11. POST /api/approvals/preemption/:recordId/undo - 5-Minute Undo Window (P6)
+// ============================================================================
+router.post(
+  '/preemption/:recordId/undo',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { recordId } = req.params;
+      const { undoReason } = req.body;
+      const user = req.user!;
+
+      const result = await undoPreemption(recordId, user, undoReason);
+      return res.json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error undoing pre-emption:', err);
+      return res.status(500).json({ error: 'Failed to undo pre-emption action.' });
     }
   }
 );
