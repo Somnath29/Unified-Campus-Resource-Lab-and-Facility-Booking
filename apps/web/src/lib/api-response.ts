@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { ApiError } from './auth';
+import { InvalidStateTransitionError } from '@lpu/shared';
 
 export function ok<T>(data: T, init?: ResponseInit): NextResponse {
   return NextResponse.json(data, { status: 200, ...init });
@@ -33,6 +34,10 @@ export function withErrorHandling(
 
       if (err instanceof ApiError) {
         return fail(err.status, err.message, err.details);
+      }
+
+      if (err instanceof InvalidStateTransitionError) {
+        return fail(409, err.message);
       }
 
       const msg = String(err?.message || '');

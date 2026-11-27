@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Calendar,
@@ -13,61 +13,172 @@ import {
   Trash2,
   Plus,
   ChevronRight,
-  Filter,
+  ChevronLeft,
+  RefreshCw,
+  Clock3,
+  Repeat,
+  PlusCircle,
+  LogOut,
+  CalendarRange,
+  Users,
+  Search,
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
-import { CheckInModal } from '@/components/booking/CheckInModal';
-import { BookingModal } from '@/components/booking/BookingModal';
+import { RescheduleModal } from '@/components/booking/RescheduleModal';
+import { CancelBookingModal } from '@/components/booking/CancelBookingModal';
+import { ExtendBookingModal } from '@/components/booking/ExtendBookingModal';
+import { EndEarlyModal } from '@/components/booking/EndEarlyModal';
+import { BookingQrModal } from '@/components/booking/BookingQrModal';
 import { api } from '@/lib/api';
-import { BookingDTO, BookingStatus } from '@lpu/shared';
+import { BookingListItemDTO, MyBookingsTab } from '@lpu/shared';
+import { formatKolkataDateTime, formatKolkataTimeRange } from '@/lib/timezone';
 
 export default function MyBookingsPage() {
-  const [bookings, setBookings] = useState<BookingDTO[]>([]);
+  const [activeTab, setActiveTab] = useState<MyBookingsTab>('UPCOMING');
+  const [bookings, setBookings] = useState<BookingListItemDTO[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successToast, setSuccessToast] = useState<string | null>(null);
 
-  // Modals
-  const [isCheckInModalOpen, setIsCheckInModalOpen] = useState(false);
-  const [selectedBookingForCheckIn, setSelectedBookingForCheckIn] = useState<BookingDTO | null>(null);
-  const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
+  // Pagination State
+  const [page, setPage] = useState(1);
+  const [limit] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [tabCounts, setTabCounts] = useState({
+    upcoming: 0,
+    pending: 0,
+    past: 0,
+    cancelled: 0,
+  });
 
-  useEffect(() => {
-    fetchUserBookings();
-  }, []);
+  // Modal target states
+  const [rescheduleTarget, setRescheduleTarget] = useState<BookingListItemDTO | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<BookingListItemDTO | null>(null);
+  const [extendTarget, setExtendTarget] = useState<BookingListItemDTO | null>(null);
+  const [endEarlyTarget, setEndEarlyTarget] = useState<BookingListItemDTO | null>(null);
+  const [qrTarget, setQrTarget] = useState<BookingListItemDTO | null>(null);
 
-  const fetchUserBookings = async () => {
+  const fetchBookings = useCallback(async (targetTab = activeTab, targetPage = page) => {
     setIsLoading(true);
+    setErrorMessage(null);
     try {
-      const res = await api.bookings.list({ myOnly: 'true' });
+      const res = await api.bookings.my({
+        tab: targetTab,
+        page: targetPage,
+        limit,
+      });
+
       setBookings(res.bookings || []);
-    } catch (err) {
-      console.error(err);
+      setTotalCount(res.pagination.total);
+      setTotalPages(res.pagination.totalPages || 1);
+      if (res.tabCounts) {
+        setTabCounts(res.tabCounts);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to load bookings. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [activeTab, page, limit]);
 
-  const handleCancelBooking = async (id: string) => {
-    if (confirm('Are you sure you want to cancel this reservation? The slot will be released back to other students.')) {
-      try {
-        await api.bookings.cancel(id, 'Cancelled by student');
-        fetchUserBookings();
-      } catch (err: any) {
-        alert(err.message || 'Failed to cancel booking.');
-      }
+  useEffect(() => {
+    fetchBookings(activeTab, page);
+  }, [activeTab, page, fetchBookings]);
+
+  // Switch tab and reset page to 1
+  const handleTabSwitch = (newTab: MyBookingsTab) => {
+    if (newTab !== activeTab) {
+      setActiveTab(newTab);
+      setPage(1);
     }
   };
 
-  const handleOpenCheckIn = (b: BookingDTO) => {
-    setSelectedBookingForCheckIn(b);
-    setIsCheckInModalOpen(true);
+  const showNotification = (msg: string) => {
+    setSuccessToast(msg);
+    setTimeout(() => {
+      setSuccessToast(null);
+    }, 4500);
   };
 
-  const filteredBookings = bookings.filter((b) => {
-    if (filterStatus === 'ALL') return true;
-    return b.status === filterStatus;
-  });
+  // Optimistic Handlers
+  const handleRescheduleSuccess = (updated: BookingListItemDTO, message: string) => {
+    showNotification(message);
+    fetchBookings(activeTab, page);
+  };
+
+  const handleCancelSuccess = (bookingId: string, message: string) => {
+    // Optimistic removal from active list if cancelling
+    setBookings((prev) => prev.filter((b) => b.id !== bookingId));
+    showNotification(message);
+    fetchBookings(activeTab, page);
+  };
+
+  const handleExtendSuccess = (updated: BookingListItemDTO, message: string) => {
+    setBookings((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+    showNotification(message);
+    fetchBookings(activeTab, page);
+  };
+
+  const handleEndEarlySuccess = (updated: BookingListItemDTO, message: string) => {
+    setBookings((prev) => prev.filter((b) => b.id !== updated.id));
+    showNotification(message);
+    fetchBookings(activeTab, page);
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'CONFIRMED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Confirmed
+          </span>
+        );
+      case 'CHECKED_IN':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" /> Active / Checked In
+          </span>
+        );
+      case 'PENDING':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+            <Clock3 className="w-3 h-3 text-amber-600" /> Pending Approval
+          </span>
+        );
+      case 'APPROVED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-cyan-50 text-cyan-700 border border-cyan-200">
+            <CheckCircle2 className="w-3 h-3 text-cyan-600" /> Approved
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-700 border border-gray-200">
+            <CheckCircle2 className="w-3 h-3 text-gray-500" /> Completed
+          </span>
+        );
+      case 'CANCELLED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-red-50 text-red-700 border border-red-200">
+            <XCircle className="w-3 h-3 text-red-600" /> Cancelled
+          </span>
+        );
+      case 'REJECTED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+            <XCircle className="w-3 h-3 text-rose-600" /> Rejected
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-600">
+            {status}
+          </span>
+        );
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#F5F5F5] flex">
@@ -76,224 +187,383 @@ export default function MyBookingsPage() {
       <div className="flex-1 flex flex-col min-w-0">
         <Navbar />
 
-        <main className="flex-1 p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
+          {/* Toast Notification */}
+          {successToast && (
+            <div className="fixed top-5 right-5 z-50 p-4 bg-emerald-600 text-white rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold animate-in slide-in-from-top-4 duration-200">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{successToast}</span>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="text-xs text-gray-400 flex items-center gap-1.5 mb-1">
-                <Link href="/" className="hover:text-gray-600">
+                <Link href="/" className="hover:text-gray-600 transition">
                   Dashboard
                 </Link>
                 <span>›</span>
                 <span className="text-[#F58220] font-semibold">My Bookings</span>
               </div>
               <h1 className="text-2xl font-extrabold text-[#292929] tracking-tight">
-                My Reservations & Activity
+                My Bookings & Lifecycle Management
               </h1>
               <p className="text-xs text-gray-500 mt-0.5">
-                Manage upcoming sessions, verify venue check-ins, and inspect booking approvals.
+                Inspect reservation status, manage rescheduling, cancel sessions before cutoff, or extend live bookings.
               </p>
             </div>
 
-            <button
-              onClick={() => setIsBookingModalOpen(true)}
-              className="px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center justify-center gap-2"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>New Reservation</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fetchBookings(activeTab, page)}
+                disabled={isLoading}
+                className="p-2 border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-xl text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
+                title="Refresh booking list"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+              <Link
+                href="/resources"
+                className="px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>New Reservation</span>
+              </Link>
+            </div>
           </div>
 
-          {/* Filter Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-bold">
-            {['ALL', 'CONFIRMED', 'PENDING', 'CHECKED_IN', 'NO_SHOW', 'COMPLETED', 'CANCELLED'].map(
-              (st) => (
-                <button
-                  key={st}
-                  onClick={() => setFilterStatus(st)}
-                  className={`px-3 py-1.5 rounded-xl transition shrink-0 ${
-                    filterStatus === st
-                      ? 'bg-[#F58220] text-white shadow-sm'
-                      : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+          {/* Navigation Tabs */}
+          <div className="flex border-b border-gray-200/80 overflow-x-auto scrollbar-none gap-2">
+            {[
+              { id: 'UPCOMING' as MyBookingsTab, label: 'Upcoming', count: tabCounts.upcoming },
+              { id: 'PENDING' as MyBookingsTab, label: 'Pending Approval', count: tabCounts.pending },
+              { id: 'PAST' as MyBookingsTab, label: 'Past Sessions', count: tabCounts.past },
+              { id: 'CANCELLED' as MyBookingsTab, label: 'Cancelled', count: tabCounts.cancelled },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => handleTabSwitch(tab.id)}
+                className={`flex items-center gap-2 py-3 px-4 border-b-2 text-xs font-bold transition whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? 'border-[#F58220] text-[#F58220]'
+                    : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-full ${
+                    activeTab === tab.id
+                      ? 'bg-[#F58220]/10 text-[#F58220]'
+                      : 'bg-gray-200/70 text-gray-600'
                   }`}
                 >
-                  {st.replace('_', ' ')}
-                </button>
-              )
-            )}
+                  {tab.count}
+                </span>
+              </button>
+            ))}
           </div>
+
+          {/* Error Banner */}
+          {errorMessage && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+              <button
+                onClick={() => fetchBookings(activeTab, page)}
+                className="px-3 py-1 bg-white border border-red-300 text-red-700 rounded-lg text-xs font-bold hover:bg-red-50 transition"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {/* Bookings List */}
           {isLoading ? (
-            <div className="p-16 text-center">
-              <div className="w-8 h-8 border-4 border-[#F58220] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-              <div className="text-xs text-gray-400">Loading your reservations...</div>
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm animate-pulse space-y-3"
+                >
+                  <div className="h-4 bg-gray-200 rounded w-1/4" />
+                  <div className="h-3 bg-gray-100 rounded w-1/2" />
+                  <div className="h-8 bg-gray-50 rounded w-full" />
+                </div>
+              ))}
             </div>
-          ) : filteredBookings.length === 0 ? (
-            <div className="bg-white p-12 rounded-3xl border border-gray-100 text-center space-y-3">
-              <Calendar className="w-12 h-12 text-gray-300 mx-auto" />
-              <div className="text-sm font-bold text-gray-800">No reservations found</div>
-              <div className="text-xs text-gray-500 max-w-sm mx-auto">
-                You do not have any bookings matching this filter. Explore campus facilities and
-                reserve your room today.
+          ) : bookings.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center space-y-4">
+              <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto text-gray-400">
+                <CalendarRange className="w-6 h-6" />
               </div>
-              <button
-                onClick={() => setIsBookingModalOpen(true)}
-                className="mt-2 px-4 py-2 bg-[#F58220] text-white text-xs font-bold rounded-xl shadow"
-              >
-                Book a Resource Now
-              </button>
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">
+                  No {activeTab.toLowerCase()} bookings found
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+                  {activeTab === 'UPCOMING'
+                    ? "You don't have any upcoming reservations scheduled. Browse campus resources to reserve a room."
+                    : activeTab === 'PENDING'
+                    ? 'No reservations currently awaiting departmental approval.'
+                    : activeTab === 'PAST'
+                    ? 'You have not completed any bookings yet.'
+                    : 'No cancelled or rejected reservations recorded.'}
+                </p>
+              </div>
+              {activeTab === 'UPCOMING' && (
+                <Link
+                  href="/resources"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Discover Venues</span>
+                </Link>
+              )}
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredBookings.map((b) => {
-                const isConfirmedOrCheckedIn =
-                  b.status === 'CONFIRMED' || b.status === 'CHECKED_IN';
-                const isPending = b.status === 'PENDING';
-                const isNoShow = b.status === 'NO_SHOW';
+            <div className="space-y-4">
+              {bookings.map((booking) => {
+                const isRecurring = Boolean(booking.series || booking.seriesId);
+                const elig = booking.eligibility;
 
                 return (
                   <div
-                    key={b.id}
-                    className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                    key={booking.id}
+                    className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-200/80 shadow-sm hover:shadow-md transition space-y-4"
                   >
-                    <div className="flex items-start sm:items-center gap-4">
-                      <img
-                        src={
-                          b.resource?.imageUrl ||
-                          'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=600&q=80'
-                        }
-                        alt={b.resource?.name}
-                        className="w-16 h-16 rounded-2xl object-cover shrink-0 border border-gray-200"
-                      />
+                    {/* Top Row: Venue, Number & Status Badge */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-base text-[#292929]">
-                            {b.resource?.name}
-                          </span>
-                          <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
-                            {b.bookingNumber}
-                          </span>
+                          <h2 className="text-base font-extrabold text-[#292929]">
+                            {booking.resource?.name || 'Classroom / Lab'}
+                          </h2>
+                          {getStatusBadge(booking.status)}
+                          {isRecurring && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-orange-50 text-[#F58220] border border-orange-200">
+                              <Repeat className="w-3 h-3" /> Recurring Series
+                            </span>
+                          )}
                         </div>
-
-                        <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
-                          <span className="flex items-center gap-1 font-semibold text-gray-700">
-                            <Clock className="w-3.5 h-3.5 text-gray-400" />
-                            {new Date(b.startTime).toLocaleDateString()} (
-                            {new Date(b.startTime).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}{' '}
-                            -{' '}
-                            {new Date(b.endTime).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                            )
+                        <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-[#F58220] shrink-0" />
+                          <span>
+                            {booking.resource?.building} • {booking.resource?.floor || 'Ground Floor'} • Capacity: {booking.resource?.capacity}
                           </span>
-                          <span className="flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 text-gray-400" />
-                            {b.resource?.building}
-                          </span>
-                        </div>
+                        </p>
+                      </div>
 
-                        <div className="text-xs text-gray-600">
-                          <span className="font-medium text-gray-400">Purpose: </span>
-                          <span>{b.purpose}</span>
+                      <div className="text-left sm:text-right text-xs">
+                        <div className="font-mono font-bold text-gray-700">
+                          #{booking.bookingNumber}
                         </div>
-
-                        {b.approvalNotes && (
-                          <div className="text-[11px] text-blue-700 bg-blue-50/70 px-2 py-0.5 rounded max-w-lg mt-1">
-                            ℹ️ {b.approvalNotes}
-                          </div>
-                        )}
-                        {b.rejectionReason && (
-                          <div className="text-[11px] text-red-700 bg-red-50 px-2 py-0.5 rounded max-w-lg mt-1">
-                            ⚠️ {b.rejectionReason}
-                          </div>
-                        )}
+                        <div className="text-[11px] text-gray-400">
+                          Booked on {new Date(booking.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Right Status & Actions */}
-                    <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-3 shrink-0 pt-3 sm:pt-0 border-t sm:border-t-0 border-gray-100">
-                      {/* Status Badge */}
+                    {/* Middle Details Box */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-[#F5F5F5]/70 rounded-xl border border-gray-200/60 text-xs text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-[#F58220] shrink-0" />
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-gray-400">Date & Slot</div>
+                          <div className="font-semibold text-gray-800">
+                            {formatKolkataDateTime(booking.startTime)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-[#1976B9] shrink-0" />
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-gray-400">Time Range</div>
+                          <div className="font-semibold text-gray-800">
+                            {formatKolkataTimeRange(booking.startTime, booking.endTime)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-gray-400">Attendance & Activity</div>
+                          <div className="font-semibold text-gray-800">
+                            {booking.expectedAttendance} attendees • {booking.activityType.replace(/_/g, ' ')}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Purpose / Cancellation / Approval Notes */}
+                    {booking.purpose && (
+                      <div className="text-xs text-gray-600">
+                        <span className="font-bold text-gray-700">Purpose: </span>
+                        <span>{booking.purpose}</span>
+                      </div>
+                    )}
+
+                    {booking.rejectionReason && (
+                      <div className="p-3 bg-red-50 border border-red-200/80 rounded-xl text-xs text-red-700">
+                        <span className="font-bold">Cancellation / Rejection Note: </span>
+                        <span>{booking.rejectionReason}</span>
+                      </div>
+                    )}
+
+                    {booking.approvalNotes && booking.status === 'PENDING' && (
+                      <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-800">
+                        <span className="font-bold">Pending Review Note: </span>
+                        <span>{booking.approvalNotes}</span>
+                      </div>
+                    )}
+
+                    {/* Action Controls Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                      {/* Check-in Token / QR Info */}
                       <div>
-                        {b.status === 'CONFIRMED' && (
-                          <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Confirmed</span>
-                          </span>
-                        )}
-                        {b.status === 'CHECKED_IN' && (
-                          <span className="text-xs font-bold text-blue-800 bg-blue-50 border border-blue-200 px-3 py-1 rounded-full flex items-center gap-1.5">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-                            <span>Checked In</span>
-                          </span>
-                        )}
-                        {b.status === 'PENDING' && (
-                          <span className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-amber-500" />
-                            <span>Pending Approval</span>
-                          </span>
-                        )}
-                        {b.status === 'NO_SHOW' && (
-                          <span className="text-xs font-bold text-red-800 bg-red-50 border border-red-200 px-3 py-1 rounded-full flex items-center gap-1.5">
-                            <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                            <span>No-Show (Auto Released)</span>
-                          </span>
-                        )}
-                        {b.status === 'CANCELLED' && (
-                          <span className="text-xs font-bold text-gray-600 bg-gray-100 border border-gray-200 px-3 py-1 rounded-full">
-                            Cancelled
-                          </span>
+                        {elig?.canShowQr && (
+                          <button
+                            onClick={() => setQrTarget(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-xs font-bold transition"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-[#F58220]" />
+                            <span>Show Check-In QR</span>
+                          </button>
                         )}
                       </div>
 
-                      {/* Action buttons */}
-                      <div className="flex items-center gap-2">
-                        {isConfirmedOrCheckedIn && (
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Extend Session */}
+                        {elig?.canExtend && (
                           <button
-                            onClick={() => handleOpenCheckIn(b)}
-                            className="px-3 py-1.5 bg-[#FFF4EA] hover:bg-[#F58220] hover:text-white text-[#F58220] border border-[#FED7AA] text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm"
+                            onClick={() => setExtendTarget(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[#1976B9] rounded-xl text-xs font-bold transition"
                           >
-                            <QrCode className="w-3.5 h-3.5" />
-                            <span>QR Check-In ({b.checkInToken})</span>
+                            <PlusCircle className="w-3.5 h-3.5" />
+                            <span>Extend</span>
                           </button>
                         )}
 
-                        {(isConfirmedOrCheckedIn || isPending) && (
+                        {/* End Early */}
+                        {elig?.canEndEarly && (
                           <button
-                            onClick={() => handleCancelBooking(b.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                            title="Cancel Booking"
+                            onClick={() => setEndEarlyTarget(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <LogOut className="w-3.5 h-3.5" />
+                            <span>End Early</span>
                           </button>
                         )}
+
+                        {/* Reschedule */}
+                        {elig?.canReschedule && (
+                          <button
+                            onClick={() => setRescheduleTarget(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 rounded-xl text-xs font-bold transition"
+                          >
+                            <Calendar className="w-3.5 h-3.5 text-[#F58220]" />
+                            <span>Reschedule</span>
+                          </button>
+                        )}
+
+                        {/* Cancel Booking */}
+                        {elig?.canCancel ? (
+                          <button
+                            onClick={() => setCancelTarget(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-red-50 border border-gray-200 hover:border-red-200 text-red-600 rounded-xl text-xs font-bold transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Cancel</span>
+                          </button>
+                        ) : elig?.cancellationCutoffPassed && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' ? (
+                          <span
+                            className="text-[11px] text-gray-400 italic"
+                            title={`Cutoff (${elig.cancellationCutoffMinutes}m) passed`}
+                          >
+                            Cancellation closed
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
                 );
               })}
+
+              {/* Server-Side Pagination Bar */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between p-4 bg-white rounded-2xl border border-gray-100 shadow-sm text-xs">
+                  <div className="text-gray-500 font-medium">
+                    Showing {(page - 1) * limit + 1} - {Math.min(page * limit, totalCount)} of {totalCount} reservations
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page <= 1}
+                      className="p-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 transition"
+                      title="Previous Page"
+                    >
+                      <ChevronLeft className="w-4 h-4 text-gray-600" />
+                    </button>
+                    <span className="font-bold text-gray-700 px-2">
+                      Page {page} of {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={page >= totalPages}
+                      className="p-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 transition"
+                      title="Next Page"
+                    >
+                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </main>
       </div>
 
-      <CheckInModal
-        isOpen={isCheckInModalOpen}
-        onClose={() => setIsCheckInModalOpen(false)}
-        booking={selectedBookingForCheckIn}
-        onCheckInUpdated={() => fetchUserBookings()}
+      {/* Lifecycle Action Modals */}
+      <RescheduleModal
+        isOpen={Boolean(rescheduleTarget)}
+        onClose={() => setRescheduleTarget(null)}
+        booking={rescheduleTarget}
+        onSuccess={handleRescheduleSuccess}
       />
 
-      <BookingModal
-        isOpen={isBookingModalOpen}
-        onClose={() => setIsBookingModalOpen(false)}
-        onBookingSuccess={() => fetchUserBookings()}
+      <CancelBookingModal
+        isOpen={Boolean(cancelTarget)}
+        onClose={() => setCancelTarget(null)}
+        booking={cancelTarget}
+        onSuccess={handleCancelSuccess}
+      />
+
+      <ExtendBookingModal
+        isOpen={Boolean(extendTarget)}
+        onClose={() => setExtendTarget(null)}
+        booking={extendTarget}
+        onSuccess={handleExtendSuccess}
+      />
+
+      <EndEarlyModal
+        isOpen={Boolean(endEarlyTarget)}
+        onClose={() => setEndEarlyTarget(null)}
+        booking={endEarlyTarget}
+        onSuccess={handleEndEarlySuccess}
+      />
+
+      <BookingQrModal
+        isOpen={Boolean(qrTarget)}
+        onClose={() => setQrTarget(null)}
+        booking={qrTarget}
       />
     </div>
   );
 }
-

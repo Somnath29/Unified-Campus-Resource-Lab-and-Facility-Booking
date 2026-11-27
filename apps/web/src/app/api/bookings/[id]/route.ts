@@ -13,3 +13,17 @@ export const GET = withErrorHandling(
     return ok({ booking });
   }
 );
+
+export const PUT = withErrorHandling(
+  async (request: Request, { params }: { params: { id: string } }) => {
+    const user = await requireAuth(request);
+    const { id } = params;
+    const body = await request.json().catch(() => ({}));
+    const result = await BookingService.rescheduleBooking({
+      id,
+      user,
+      input: body,
+    });
+    return ok(result);
+  }
+);

@@ -265,3 +265,131 @@ export interface QuotaResponse {
   policyName: string;
   message?: string;
 }
+
+// ----------------------------------------------------
+// R6: Booking Lifecycle, Rescheduling, Extension & My Bookings Contracts
+// ----------------------------------------------------
+
+export type BookingLifecycleAction = 'RESCHEDULE' | 'CANCEL' | 'EXTEND' | 'END_EARLY' | 'SHOW_QR';
+
+export type MyBookingsTab = 'UPCOMING' | 'PENDING' | 'PAST' | 'CANCELLED';
+
+export interface BookingActionEligibility {
+  canReschedule: boolean;
+  canCancel: boolean;
+  canExtend: boolean;
+  canEndEarly: boolean;
+  canShowQr: boolean;
+  cancellationCutoffPassed: boolean;
+  cancellationCutoffMinutes: number;
+  reason?: string;
+}
+
+export interface MyBookingsQuery {
+  tab?: MyBookingsTab;
+  page?: number;
+  limit?: number;
+  sortBy?: 'startTime' | 'createdAt' | 'status';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface BookingListItemDTO extends BookingDTO {
+  actualEndTime?: string | null;
+  eligibility: BookingActionEligibility;
+  series?: {
+    id: string;
+    frequency: string;
+    totalCount?: number | null;
+  } | null;
+}
+
+export interface MyBookingsResponse {
+  bookings: BookingListItemDTO[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
+  tabCounts: {
+    upcoming: number;
+    pending: number;
+    past: number;
+    cancelled: number;
+  };
+}
+
+export interface RescheduleBookingRequest {
+  resourceId?: string;
+  startTime: string; // ISO string
+  endTime: string;   // ISO string
+  purpose?: string;
+  expectedAttendance?: number;
+  activityType?: ActivityType;
+}
+
+export interface RescheduleBookingResponse {
+  booking: BookingListItemDTO;
+  previousSchedule: {
+    startTime: string;
+    endTime: string;
+    status: BookingStatus;
+  };
+  newSchedule: {
+    startTime: string;
+    endTime: string;
+    status: BookingStatus;
+  };
+  requiresApproval: boolean;
+  message: string;
+}
+
+export interface CancelBookingRequest {
+  reason: string;
+  scope?: OccurrenceCancellationScope;
+}
+
+export interface CancelBookingResponse {
+  booking: BookingListItemDTO;
+  cancellationReason: string;
+  cancelledAt: string;
+  message: string;
+  seriesCancellation?: SeriesCancellationResponse;
+}
+
+export interface EndEarlyBookingResponse {
+  booking: BookingListItemDTO;
+  scheduledEndTime: string;
+  actualEndTime: string;
+  freedMinutes: number;
+  message: string;
+}
+
+export interface ExtendBookingRequest {
+  durationMinutes: number;
+}
+
+export interface ExtendBookingResponse {
+  booking: BookingListItemDTO;
+  previousEndTime: string;
+  newEndTime: string;
+  extendedMinutes: number;
+  message: string;
+}
+
+export interface AutomaticCompletionJobResponse {
+  processed: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  errors?: { id: string; error: string }[];
+  message: string;
+}
+
+export interface LifecycleErrorResponse {
+  error: string;
+  details?: any;
+  alternativeSlots?: AlternativeSlot[];
+}

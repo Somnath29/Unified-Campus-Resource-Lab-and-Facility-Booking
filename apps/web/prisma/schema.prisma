@@ -150,6 +150,7 @@ model Booking {
   status             BookingStatus  @default(PENDING)
   checkInToken       String?        @unique
   checkedInAt        DateTime?
+  actualEndTime      DateTime?
   releaseDeadline    DateTime?
   approvalNotes      String?
   rejectionReason    String?

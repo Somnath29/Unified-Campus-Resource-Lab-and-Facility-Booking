@@ -101,16 +101,21 @@ async function setup() {
   });
   await prisma.booking.deleteMany({
     where: {
-      purpose: {
-        in: [
-          'R4 Auto Confirmation Test',
-          'R4 Long Duration Approval Test',
-          'R4 Concurrent Submission Test',
-          'R4 Conflict Test Booking 1',
-          'R4 Conflict Test Booking 2',
-          'R4 Alternative Slot Target',
-        ],
-      },
+      OR: [
+        {
+          purpose: {
+            in: [
+              'R4 Auto Confirmation Test',
+              'R4 Long Duration Approval Test',
+              'R4 Concurrent Submission Test',
+              'R4 Conflict Test Booking 1',
+              'R4 Conflict Test Booking 2',
+              'R4 Alternative Slot Target',
+            ],
+          },
+        },
+        { purpose: { contains: 'Concurrent test attempt' } },
+      ],
     },
   });
 }

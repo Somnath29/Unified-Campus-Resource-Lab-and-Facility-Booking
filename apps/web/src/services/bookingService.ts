@@ -2,9 +2,31 @@ import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { BookingStatus, ActivityType, PriorityLevel, Role, Prisma } from '@prisma/client';
 import { ApiError } from '@/lib/auth';
-import { validateOperatingHours, getDayOfWeekInKolkata, getTimeStringInKolkata } from '@/lib/timezone';
+import env from '@/config/env';
+import {
+  validateOperatingHours,
+  getDayOfWeekInKolkata,
+  getTimeStringInKolkata,
+  getDateStringInKolkata,
+  kolkataToUtc,
+  addDaysKolkata,
+} from '@/lib/timezone';
 import { evaluateBookingPolicy } from './policyService';
-import { validateBookingTransition, canCancelBooking } from '@lpu/shared';
+import {
+  validateBookingTransition,
+  canCancelBooking,
+  MyBookingsQuery,
+  MyBookingsResponse,
+  MyBookingsTab,
+  BookingListItemDTO,
+  BookingActionEligibility,
+  RescheduleBookingRequest,
+  RescheduleBookingResponse,
+  EndEarlyBookingResponse,
+  ExtendBookingResponse,
+  AutomaticCompletionJobResponse,
+  AlternativeSlot,
+} from '@lpu/shared';
 
 export interface CreateBookingInput {
   resourceId: string;
@@ -89,6 +111,95 @@ export async function getNextBookingNumber(tx: Prisma.TransactionClient): Promis
     const seqNum = String(count + 1001).padStart(6, '0');
     return `LPU-${currentYear}-${seqNum}`;
   }
+}
+
+/**
+ * Searches for up to 3 genuine available alternative time slots on the same resource.
+ */
+export async function findAlternativeSlots(
+  resourceId: string,
+  targetDate: string,
+  durationMinutes: number,
+  operatingHours: string,
+  excludeBookingId?: string
+): Promise<AlternativeSlot[]> {
+  const alternatives: AlternativeSlot[] = [];
+  const datesToInspect = [targetDate, addDaysKolkata(targetDate, 1)];
+
+  // Candidate start times to probe
+  const candidateStarts = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+
+  for (const dateStr of datesToInspect) {
+    if (alternatives.length >= 3) break;
+
+    const dayOfWeek = getDayOfWeekInKolkata(kolkataToUtc(dateStr, '12:00'));
+
+    for (const startHHMM of candidateStarts) {
+      if (alternatives.length >= 3) break;
+
+      const [sH, sM] = startHHMM.split(':').map(Number);
+      const totalStartMin = sH * 60 + sM;
+      const totalEndMin = totalStartMin + durationMinutes;
+
+      const eH = Math.floor(totalEndMin / 60);
+      const eM = totalEndMin % 60;
+      if (eH >= 24) continue;
+
+      const endHHMM = `${String(eH).padStart(2, '0')}:${String(eM).padStart(2, '0')}`;
+
+      const candStartUtc = kolkataToUtc(dateStr, startHHMM);
+      const candEndUtc = kolkataToUtc(dateStr, endHHMM);
+
+      // Check operating hours
+      const opCheck = validateOperatingHours(candStartUtc, candEndUtc, operatingHours);
+      if (!opCheck.valid) continue;
+
+      // Check timetable conflict
+      const timetableClash = await prisma.timetableEntry.findFirst({
+        where: {
+          resourceId,
+          dayOfWeek,
+          AND: [
+            { startTime: { lt: endHHMM } },
+            { endTime: { gt: startHHMM } },
+          ],
+        },
+      });
+      if (timetableClash) continue;
+
+      // Check existing booking conflict
+      const clashWhere: Prisma.BookingWhereInput = {
+        resourceId,
+        status: {
+          in: [
+            BookingStatus.PENDING,
+            BookingStatus.APPROVED,
+            BookingStatus.CONFIRMED,
+            BookingStatus.CHECKED_IN,
+          ],
+        },
+        AND: [
+          { startTime: { lt: candEndUtc } },
+          { endTime: { gt: candStartUtc } },
+        ],
+      };
+      if (excludeBookingId) {
+        clashWhere.id = { not: excludeBookingId };
+      }
+
+      const bookingClash = await prisma.booking.findFirst({ where: clashWhere });
+      if (bookingClash) continue;
+
+      alternatives.push({
+        date: dateStr,
+        startTime: startHHMM,
+        endTime: endHHMM,
+        durationMinutes,
+      });
+    }
+  }
+
+  return alternatives;
 }
 
 /**
@@ -512,13 +623,98 @@ export class BookingService {
   }
 
   /**
+   * Computes action eligibility for a booking based on status, timestamps, and roles.
+   */
+  static computeBookingEligibility(
+    booking: {
+      status: BookingStatus;
+      startTime: Date;
+      endTime: Date;
+      userId: string;
+      checkInToken?: string | null;
+    },
+    user: BookingUserContext
+  ): BookingActionEligibility {
+    const isOwner = booking.userId === user.id;
+    const isAdmin = user.role === Role.ADMINISTRATOR;
+    const isDeptApprover = user.role === Role.DEPARTMENT_APPROVER;
+
+    const cutoffMinutes = env.CANCELLATION_CUTOFF_MINUTES ?? 60;
+    const now = new Date();
+    const cutoffTime = new Date(booking.startTime.getTime() - cutoffMinutes * 60 * 1000);
+    const cancellationCutoffPassed = now >= cutoffTime;
+
+    const isPendingOrConfirmed =
+      booking.status === BookingStatus.PENDING ||
+      booking.status === BookingStatus.APPROVED ||
+      booking.status === BookingStatus.CONFIRMED;
+
+    // Reschedule: only before check-in, owner or admin/approver
+    const canReschedule = isPendingOrConfirmed && (isOwner || isAdmin || isDeptApprover);
+
+    // Cancel:
+    // 1. Must be cancellable by state machine (PENDING, APPROVED, CONFIRMED)
+    // 2. If cutoff passed: only admin/approver can cancel
+    // 3. Otherwise: owner can cancel
+    let canCancel = false;
+    let cancelReasonMsg: string | undefined;
+
+    if (canCancelBooking(booking.status)) {
+      if (isAdmin || isDeptApprover) {
+        canCancel = true;
+      } else if (isOwner) {
+        if (cancellationCutoffPassed) {
+          canCancel = false;
+          cancelReasonMsg = `Cancellation cutoff passed (${cutoffMinutes}m before start). Contact department approver.`;
+        } else {
+          canCancel = true;
+        }
+      }
+    } else {
+      cancelReasonMsg = `Status ${booking.status} is non-cancellable.`;
+    }
+
+    // Extend & End Early: only when CHECKED_IN, owner or admin
+    const canExtend = booking.status === BookingStatus.CHECKED_IN && (isOwner || isAdmin);
+    const canEndEarly = booking.status === BookingStatus.CHECKED_IN && (isOwner || isAdmin);
+
+    // Show QR: CONFIRMED or CHECKED_IN, owner or admin
+    const canShowQr =
+      Boolean(booking.checkInToken) &&
+      (booking.status === BookingStatus.CONFIRMED || booking.status === BookingStatus.CHECKED_IN) &&
+      (isOwner || isAdmin);
+
+    return {
+      canReschedule,
+      canCancel,
+      canExtend,
+      canEndEarly,
+      canShowQr,
+      cancellationCutoffPassed,
+      cancellationCutoffMinutes: cutoffMinutes,
+      reason: cancelReasonMsg,
+    };
+  }
+
+  /**
    * Cancels an eligible booking, enforcing state machine transitions,
-   * permissions, notifications, and audit logging.
+   * configurable cutoff, permissions, notifications, and audit logging.
    */
   static async cancelBooking(id: string, user: BookingUserContext, reason?: string) {
+    if (reason !== undefined && !reason.trim()) {
+      throw new ApiError(400, 'A non-empty cancellation reason is required.');
+    }
+    const cleanReason = (reason && reason.trim()) || (user.name ? `Cancelled by ${user.name}` : 'Cancelled by requester');
+    if (cleanReason.length > 500) {
+      throw new ApiError(400, 'Cancellation reason exceeds maximum length of 500 characters.');
+    }
+
     const booking = await prisma.booking.findUnique({
       where: { id },
-      include: { resource: true },
+      include: {
+        resource: true,
+        series: { select: { id: true, frequency: true, count: true } },
+      },
     });
 
     if (!booking) {
@@ -536,11 +732,28 @@ export class BookingService {
       throw new ApiError(403, 'Unauthorized to cancel this booking.');
     }
 
-    // State Machine Validation
+    // State Machine Validation:
+    if (booking.status === BookingStatus.CANCELLED) {
+      throw new ApiError(400, 'Booking has already been cancelled.');
+    }
+
+    // COMPLETED, CHECKED_IN, NO_SHOW cannot be cancelled -> 409 Conflict!
     if (!canCancelBooking(booking.status)) {
       throw new ApiError(
-        400,
+        409,
         `Cannot cancel booking with current status: ${booking.status}. Only PENDING, APPROVED, or CONFIRMED bookings may be cancelled.`
+      );
+    }
+
+    // Cancellation Cutoff check for requester/owner (Admin & Approver can cancel after cutoff)
+    const cutoffMinutes = env.CANCELLATION_CUTOFF_MINUTES ?? 60;
+    const now = new Date();
+    const cutoffTime = new Date(booking.startTime.getTime() - cutoffMinutes * 60 * 1000);
+
+    if (now >= cutoffTime && isOwner && !isAdmin && !isDeptApprover) {
+      throw new ApiError(
+        403,
+        `Cancellation window closed: Bookings cannot be cancelled by requesters less than ${cutoffMinutes} minutes prior to scheduled start time. Please contact a department approver or administrator.`
       );
     }
 
@@ -551,9 +764,12 @@ export class BookingService {
         where: { id },
         data: {
           status: BookingStatus.CANCELLED,
-          rejectionReason: reason || (isOwner ? 'Cancelled by requester' : `Cancelled by ${user.name}`),
+          rejectionReason: cleanReason,
         },
-        include: { resource: true },
+        include: {
+          resource: true,
+          series: { select: { id: true, frequency: true, count: true } },
+        },
       });
 
       await tx.auditLog.create({
@@ -565,7 +781,9 @@ export class BookingService {
           details: JSON.stringify({
             bookingNumber: b.bookingNumber,
             cancelledBy: user.email,
-            reason: reason || 'Cancelled by requester',
+            role: user.role,
+            reason: cleanReason,
+            cutoffMinutes,
           }),
         },
       });
@@ -579,9 +797,9 @@ export class BookingService {
         data: {
           userId: booking.userId,
           title: `Booking Cancelled: ${booking.resource.name}`,
-          message: `Booking #${booking.bookingNumber} was cancelled. Reason: ${reason || 'Cancelled by user.'}`,
+          message: `Booking #${booking.bookingNumber} was cancelled. Reason: ${cleanReason}`,
           type: 'BOOKING',
-          link: '/my-bookings',
+          link: '/my-bookings?tab=CANCELLED',
         },
       });
     } catch {
@@ -589,6 +807,876 @@ export class BookingService {
     }
 
     return updated;
+  }
+
+  /**
+   * Reschedules an eligible booking to a new time or resource.
+   */
+  static async rescheduleBooking({
+    id,
+    user,
+    input,
+  }: {
+    id: string;
+    user: BookingUserContext;
+    input: RescheduleBookingRequest;
+  }): Promise<RescheduleBookingResponse> {
+    const booking = await prisma.booking.findUnique({
+      where: { id },
+      include: {
+        resource: true,
+        series: { select: { id: true, frequency: true, count: true } },
+      },
+    });
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found.');
+    }
+
+    // 1. Authorization Check
+    const isOwner = booking.userId === user.id;
+    const isAdmin = user.role === Role.ADMINISTRATOR;
+    const isDeptApprover =
+      user.role === Role.DEPARTMENT_APPROVER &&
+      (user.department === booking.departmentId || user.department === booking.resource.department);
+
+    if (!isOwner && !isAdmin && !isDeptApprover) {
+      throw new ApiError(403, 'Unauthorized to reschedule this booking.');
+    }
+
+    // 2. State Machine Eligibility Check
+    const allowedStatuses: BookingStatus[] = [
+      BookingStatus.PENDING,
+      BookingStatus.APPROVED,
+      BookingStatus.CONFIRMED,
+    ];
+
+    if (!allowedStatuses.includes(booking.status)) {
+      throw new ApiError(
+        409,
+        `Cannot reschedule booking with status ${booking.status}. Only PENDING, APPROVED, or CONFIRMED bookings may be rescheduled.`
+      );
+    }
+
+    // 3. Time Validation
+    const newStart = new Date(input.startTime);
+    const newEnd = new Date(input.endTime);
+
+    if (isNaN(newStart.getTime()) || isNaN(newEnd.getTime())) {
+      throw new ApiError(400, 'Invalid start or end time format.');
+    }
+
+    if (newEnd <= newStart) {
+      throw new ApiError(400, 'End time must be strictly after start time.');
+    }
+
+    const durationMinutes = (newEnd.getTime() - newStart.getTime()) / (1000 * 60);
+    if (durationMinutes < 15) {
+      throw new ApiError(400, 'Minimum booking duration is 15 minutes.');
+    }
+
+    if (durationMinutes / 60 > 8) {
+      throw new ApiError(400, 'Maximum single booking duration is 8 hours.');
+    }
+
+    // 4. Resource Check
+    const targetResourceId = input.resourceId || booking.resourceId;
+    const targetResource = await prisma.resource.findUnique({
+      where: { id: targetResourceId },
+    });
+
+    if (!targetResource || targetResource.deletedAt !== null) {
+      throw new ApiError(404, 'Selected resource does not exist or has been archived.');
+    }
+
+    if (targetResource.isUnderMaintenance) {
+      throw new ApiError(
+        400,
+        `Resource is currently under maintenance: ${targetResource.maintenanceReason || 'Scheduled upkeep'}.`
+      );
+    }
+
+    const attendance = input.expectedAttendance || booking.expectedAttendance;
+    if (attendance > targetResource.capacity) {
+      throw new ApiError(
+        400,
+        `Expected attendance (${attendance}) exceeds resource capacity of ${targetResource.capacity}.`
+      );
+    }
+
+    // 5. Operating Hours
+    const opCheck = validateOperatingHours(newStart, newEnd, targetResource.operatingHours);
+    if (!opCheck.valid) {
+      throw new ApiError(400, opCheck.reason || 'Requested time is outside facility operating hours.');
+    }
+
+    // 6. Timetable Clash Check
+    const dayOfWeek = getDayOfWeekInKolkata(newStart);
+    const startHHMM = getTimeStringInKolkata(newStart);
+    const endHHMM = getTimeStringInKolkata(newEnd);
+
+    const timetableClash = await prisma.timetableEntry.findFirst({
+      where: {
+        resourceId: targetResource.id,
+        dayOfWeek,
+        AND: [
+          { startTime: { lt: endHHMM } },
+          { endTime: { gt: startHHMM } },
+        ],
+      },
+    });
+
+    if (timetableClash) {
+      const targetDateStr = getDateStringInKolkata(newStart);
+      const alternativeSlots = await findAlternativeSlots(
+        targetResource.id,
+        targetDateStr,
+        durationMinutes,
+        targetResource.operatingHours,
+        booking.id
+      );
+      throw new ApiError(
+        409,
+        `Academic timetable conflict: ${timetableClash.courseCode} - ${timetableClash.courseName} (${timetableClash.startTime} - ${timetableClash.endTime}).`,
+        { timetableClash, alternativeSlots }
+      );
+    }
+
+    // 7. Booking Overlap Check (CRITICAL: exclude the booking being rescheduled!)
+    const overlap = await prisma.booking.findFirst({
+      where: {
+        resourceId: targetResource.id,
+        id: { not: booking.id },
+        status: {
+          in: [
+            BookingStatus.PENDING,
+            BookingStatus.APPROVED,
+            BookingStatus.CONFIRMED,
+            BookingStatus.CHECKED_IN,
+          ],
+        },
+        AND: [
+          { startTime: { lt: newEnd } },
+          { endTime: { gt: newStart } },
+        ],
+      },
+    });
+
+    if (overlap) {
+      const targetDateStr = getDateStringInKolkata(newStart);
+      const alternativeSlots = await findAlternativeSlots(
+        targetResource.id,
+        targetDateStr,
+        durationMinutes,
+        targetResource.operatingHours,
+        booking.id
+      );
+      throw new ApiError(
+        409,
+        'Slot conflict: The selected resource is already booked or reserved during this time window.',
+        { conflictingBookingId: overlap.id, alternativeSlots }
+      );
+    }
+
+    // 8. Policy Evaluation
+    const policyDecision = await evaluateBookingPolicy({
+      user,
+      resource: targetResource,
+      startTime: newStart,
+      endTime: newEnd,
+      prisma,
+    });
+
+    if (!policyDecision.allowed) {
+      throw new ApiError(400, policyDecision.reason || 'Rescheduling rejected by department policy.');
+    }
+
+    const newStatus: BookingStatus = policyDecision.requiresApproval
+      ? BookingStatus.PENDING
+      : BookingStatus.CONFIRMED;
+
+    // 9. Execute in transaction
+    const previousSchedule = {
+      startTime: booking.startTime.toISOString(),
+      endTime: booking.endTime.toISOString(),
+      status: booking.status,
+    };
+
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      // Re-verify overlap inside tx
+      const txOverlap = await tx.booking.findFirst({
+        where: {
+          resourceId: targetResource.id,
+          id: { not: booking.id },
+          status: {
+            in: [
+              BookingStatus.PENDING,
+              BookingStatus.APPROVED,
+              BookingStatus.CONFIRMED,
+              BookingStatus.CHECKED_IN,
+            ],
+          },
+          AND: [
+            { startTime: { lt: newEnd } },
+            { endTime: { gt: newStart } },
+          ],
+        },
+      });
+
+      if (txOverlap) {
+        throw new ApiError(
+          409,
+          'Slot conflict: The selected resource was just reserved by another request during this time window.'
+        );
+      }
+
+      const b = await tx.booking.update({
+        where: { id: booking.id },
+        data: {
+          resourceId: targetResource.id,
+          startTime: newStart,
+          endTime: newEnd,
+          status: newStatus,
+          purpose: input.purpose ? input.purpose.trim() : booking.purpose,
+          expectedAttendance: attendance,
+          activityType: input.activityType || booking.activityType,
+          approvalNotes: policyDecision.requiresApproval
+            ? (policyDecision.reason || 'Rescheduled booking requires re-approval.')
+            : null,
+          releaseDeadline: new Date(newStart.getTime() + policyDecision.autoReleaseMinutes * 60000),
+        },
+        include: {
+          resource: true,
+          series: { select: { id: true, frequency: true, count: true } },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'BOOKING_RESCHEDULED',
+          userId: user.id,
+          entityType: 'Booking',
+          entityId: booking.id,
+          details: JSON.stringify({
+            bookingNumber: booking.bookingNumber,
+            previousSchedule,
+            newSchedule: {
+              startTime: newStart.toISOString(),
+              endTime: newEnd.toISOString(),
+              status: newStatus,
+            },
+            requiresApproval: policyDecision.requiresApproval,
+          }),
+        },
+      });
+
+      return b;
+    });
+
+    // 10. Notify user
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: booking.userId,
+          title: `Booking Rescheduled: ${targetResource.name}`,
+          message: policyDecision.requiresApproval
+            ? `Booking #${booking.bookingNumber} was rescheduled and is now pending approver endorsement.`
+            : `Booking #${booking.bookingNumber} was successfully rescheduled to ${newStart.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}.`,
+          type: 'BOOKING',
+          link: '/my-bookings',
+        },
+      });
+    } catch {}
+
+    const eligibility = BookingService.computeBookingEligibility(updatedBooking, user);
+    const bookingListItem: BookingListItemDTO = {
+      ...updatedBooking,
+      startTime: updatedBooking.startTime.toISOString(),
+      endTime: updatedBooking.endTime.toISOString(),
+      actualEndTime: updatedBooking.actualEndTime ? updatedBooking.actualEndTime.toISOString() : null,
+      checkedInAt: updatedBooking.checkedInAt ? updatedBooking.checkedInAt.toISOString() : null,
+      releaseDeadline: updatedBooking.releaseDeadline ? updatedBooking.releaseDeadline.toISOString() : null,
+      createdAt: updatedBooking.createdAt.toISOString(),
+      updatedAt: updatedBooking.updatedAt.toISOString(),
+      activityType: updatedBooking.activityType as any,
+      priority: updatedBooking.priority as any,
+      status: updatedBooking.status as any,
+      resource: updatedBooking.resource as any,
+      series: updatedBooking.series
+        ? {
+            id: updatedBooking.series.id,
+            frequency: updatedBooking.series.frequency,
+            totalCount: updatedBooking.series.count,
+          }
+        : null,
+      eligibility,
+    };
+
+    return {
+      booking: bookingListItem,
+      previousSchedule,
+      newSchedule: {
+        startTime: newStart.toISOString(),
+        endTime: newEnd.toISOString(),
+        status: newStatus,
+      },
+      requiresApproval: policyDecision.requiresApproval,
+      message: policyDecision.requiresApproval
+        ? 'Booking rescheduled successfully and submitted for approver endorsement.'
+        : 'Booking rescheduled successfully.',
+    };
+  }
+
+  /**
+   * Ends an active checked-in booking early and records actual completion time.
+   */
+  static async endBookingEarly(id: string, user: BookingUserContext): Promise<EndEarlyBookingResponse> {
+    const booking = await prisma.booking.findUnique({
+      where: { id },
+      include: {
+        resource: true,
+        series: { select: { id: true, frequency: true, count: true } },
+      },
+    });
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found.');
+    }
+
+    const isOwner = booking.userId === user.id;
+    const isAdmin = user.role === Role.ADMINISTRATOR;
+
+    if (!isOwner && !isAdmin) {
+      throw new ApiError(403, 'Unauthorized to end this booking early.');
+    }
+
+    // State Machine Validation: only CHECKED_IN bookings can be ended early!
+    if (booking.status !== BookingStatus.CHECKED_IN) {
+      throw new ApiError(
+        409,
+        `Cannot end booking early. Current status is ${booking.status}; only CHECKED_IN bookings can be ended early.`
+      );
+    }
+
+    validateBookingTransition(booking.status, BookingStatus.COMPLETED);
+
+    const now = new Date();
+    const scheduledEnd = new Date(booking.endTime);
+    const freedMinutes = Math.max(0, Math.round((scheduledEnd.getTime() - now.getTime()) / 60000));
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const b = await tx.booking.update({
+        where: { id },
+        data: {
+          status: BookingStatus.COMPLETED,
+          actualEndTime: now,
+        },
+        include: {
+          resource: true,
+          series: { select: { id: true, frequency: true, count: true } },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'BOOKING_ENDED_EARLY',
+          userId: user.id,
+          entityType: 'Booking',
+          entityId: id,
+          details: JSON.stringify({
+            bookingNumber: b.bookingNumber,
+            scheduledEndTime: scheduledEnd.toISOString(),
+            actualEndTime: now.toISOString(),
+            freedMinutes,
+          }),
+        },
+      });
+
+      return b;
+    });
+
+    // Notify user
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: booking.userId,
+          title: `Booking Ended Early: ${booking.resource.name}`,
+          message: `Booking #${booking.bookingNumber} was completed early. ${freedMinutes} minutes released.`,
+          type: 'BOOKING',
+          link: '/my-bookings?tab=PAST',
+        },
+      });
+    } catch {}
+
+    const eligibility = BookingService.computeBookingEligibility(updated, user);
+    const bookingListItem: BookingListItemDTO = {
+      ...updated,
+      startTime: updated.startTime.toISOString(),
+      endTime: updated.endTime.toISOString(),
+      actualEndTime: updated.actualEndTime ? updated.actualEndTime.toISOString() : null,
+      checkedInAt: updated.checkedInAt ? updated.checkedInAt.toISOString() : null,
+      releaseDeadline: updated.releaseDeadline ? updated.releaseDeadline.toISOString() : null,
+      createdAt: updated.createdAt.toISOString(),
+      updatedAt: updated.updatedAt.toISOString(),
+      activityType: updated.activityType as any,
+      priority: updated.priority as any,
+      status: updated.status as any,
+      resource: updated.resource as any,
+      series: updated.series
+        ? {
+            id: updated.series.id,
+            frequency: updated.series.frequency,
+            totalCount: updated.series.count,
+          }
+        : null,
+      eligibility,
+    };
+
+    return {
+      booking: bookingListItem,
+      scheduledEndTime: scheduledEnd.toISOString(),
+      actualEndTime: now.toISOString(),
+      freedMinutes,
+      message: `Booking successfully ended early. Released ${freedMinutes} minutes of venue time.`,
+    };
+  }
+
+  /**
+   * Extends an active checked-in booking if the subsequent slot is genuinely available.
+   */
+  static async extendBooking(
+    id: string,
+    user: BookingUserContext,
+    durationMinutes: number
+  ): Promise<ExtendBookingResponse> {
+    if (!durationMinutes || durationMinutes <= 0) {
+      throw new ApiError(400, 'Extension duration must be a positive number of minutes.');
+    }
+    if (durationMinutes > 120) {
+      throw new ApiError(400, 'Maximum single extension duration is 120 minutes (2 hours).');
+    }
+
+    const booking = await prisma.booking.findUnique({
+      where: { id },
+      include: {
+        resource: true,
+        series: { select: { id: true, frequency: true, count: true } },
+      },
+    });
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found.');
+    }
+
+    const isOwner = booking.userId === user.id;
+    const isAdmin = user.role === Role.ADMINISTRATOR;
+
+    if (!isOwner && !isAdmin) {
+      throw new ApiError(403, 'Unauthorized to extend this booking.');
+    }
+
+    // Only active CHECKED_IN bookings can be extended
+    if (booking.status !== BookingStatus.CHECKED_IN) {
+      throw new ApiError(
+        409,
+        `Cannot extend booking with status ${booking.status}. Only active CHECKED_IN bookings can be extended.`
+      );
+    }
+
+    const currentEnd = new Date(booking.endTime);
+    const newEnd = new Date(currentEnd.getTime() + durationMinutes * 60000);
+
+    // Total duration <= 8 hours
+    const totalHours = (newEnd.getTime() - booking.startTime.getTime()) / (1000 * 60 * 60);
+    if (totalHours > 8) {
+      throw new ApiError(400, 'Extended booking cannot exceed the 8-hour maximum limit.');
+    }
+
+    // Operating hours check
+    const opCheck = validateOperatingHours(booking.startTime, newEnd, booking.resource.operatingHours);
+    if (!opCheck.valid) {
+      throw new ApiError(400, opCheck.reason || 'Extension exceeds facility operating hours.');
+    }
+
+    // Timetable clash during extension interval [currentEnd, newEnd)
+    const dayOfWeek = getDayOfWeekInKolkata(currentEnd);
+    const startHHMM = getTimeStringInKolkata(currentEnd);
+    const endHHMM = getTimeStringInKolkata(newEnd);
+
+    const timetableClash = await prisma.timetableEntry.findFirst({
+      where: {
+        resourceId: booking.resourceId,
+        dayOfWeek,
+        AND: [
+          { startTime: { lt: endHHMM } },
+          { endTime: { gt: startHHMM } },
+        ],
+      },
+    });
+
+    if (timetableClash) {
+      throw new ApiError(
+        409,
+        `Cannot extend booking: Academic timetable conflict (${timetableClash.courseCode} - ${timetableClash.courseName}).`
+      );
+    }
+
+    // Overlap check during extension interval [currentEnd, newEnd) excluding current booking
+    const overlap = await prisma.booking.findFirst({
+      where: {
+        resourceId: booking.resourceId,
+        id: { not: booking.id },
+        status: {
+          in: [
+            BookingStatus.PENDING,
+            BookingStatus.APPROVED,
+            BookingStatus.CONFIRMED,
+            BookingStatus.CHECKED_IN,
+          ],
+        },
+        AND: [
+          { startTime: { lt: newEnd } },
+          { endTime: { gt: currentEnd } },
+        ],
+      },
+    });
+
+    if (overlap) {
+      throw new ApiError(
+        409,
+        'Cannot extend booking: The following time slot is already reserved by another user.'
+      );
+    }
+
+    // Transaction execution
+    const updated = await prisma.$transaction(async (tx) => {
+      // Re-verify overlap inside tx
+      const txOverlap = await tx.booking.findFirst({
+        where: {
+          resourceId: booking.resourceId,
+          id: { not: booking.id },
+          status: {
+            in: [
+              BookingStatus.PENDING,
+              BookingStatus.APPROVED,
+              BookingStatus.CONFIRMED,
+              BookingStatus.CHECKED_IN,
+            ],
+          },
+          AND: [
+            { startTime: { lt: newEnd } },
+            { endTime: { gt: currentEnd } },
+          ],
+        },
+      });
+
+      if (txOverlap) {
+        throw new ApiError(
+          409,
+          'Cannot extend booking: The following time slot was just reserved by another user.'
+        );
+      }
+
+      const b = await tx.booking.update({
+        where: { id },
+        data: { endTime: newEnd },
+        include: {
+          resource: true,
+          series: { select: { id: true, frequency: true, count: true } },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'BOOKING_EXTENDED',
+          userId: user.id,
+          entityType: 'Booking',
+          entityId: id,
+          details: JSON.stringify({
+            bookingNumber: booking.bookingNumber,
+            previousEndTime: currentEnd.toISOString(),
+            newEndTime: newEnd.toISOString(),
+            extendedMinutes: durationMinutes,
+          }),
+        },
+      });
+
+      return b;
+    });
+
+    // Notify user
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: booking.userId,
+          title: `Booking Extended: ${booking.resource.name}`,
+          message: `Booking #${booking.bookingNumber} has been extended by ${durationMinutes} minutes until ${getTimeStringInKolkata(newEnd)}.`,
+          type: 'BOOKING',
+          link: '/my-bookings?tab=UPCOMING',
+        },
+      });
+    } catch {}
+
+    const eligibility = BookingService.computeBookingEligibility(updated, user);
+    const bookingListItem: BookingListItemDTO = {
+      ...updated,
+      startTime: updated.startTime.toISOString(),
+      endTime: updated.endTime.toISOString(),
+      actualEndTime: updated.actualEndTime ? updated.actualEndTime.toISOString() : null,
+      checkedInAt: updated.checkedInAt ? updated.checkedInAt.toISOString() : null,
+      releaseDeadline: updated.releaseDeadline ? updated.releaseDeadline.toISOString() : null,
+      createdAt: updated.createdAt.toISOString(),
+      updatedAt: updated.updatedAt.toISOString(),
+      activityType: updated.activityType as any,
+      priority: updated.priority as any,
+      status: updated.status as any,
+      resource: updated.resource as any,
+      series: updated.series
+        ? {
+            id: updated.series.id,
+            frequency: updated.series.frequency,
+            totalCount: updated.series.count,
+          }
+        : null,
+      eligibility,
+    };
+
+    return {
+      booking: bookingListItem,
+      previousEndTime: currentEnd.toISOString(),
+      newEndTime: newEnd.toISOString(),
+      extendedMinutes: durationMinutes,
+      message: `Successfully extended reservation by ${durationMinutes} minutes.`,
+    };
+  }
+
+  /**
+   * Scheduled Job: Automatically completes expired CHECKED_IN bookings whose end time has passed.
+   */
+  static async autoCompleteExpiredBookings(): Promise<AutomaticCompletionJobResponse> {
+    const now = new Date();
+    const expiredCheckedIn = await prisma.booking.findMany({
+      where: {
+        status: BookingStatus.CHECKED_IN,
+        endTime: { lte: now },
+      },
+      include: { resource: true },
+    });
+
+    let completed = 0;
+    let failed = 0;
+    const errors: { id: string; error: string }[] = [];
+
+    for (const b of expiredCheckedIn) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.booking.update({
+            where: { id: b.id },
+            data: {
+              status: BookingStatus.COMPLETED,
+              actualEndTime: b.endTime,
+            },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              action: 'BOOKING_AUTO_COMPLETED',
+              userId: b.userId,
+              entityType: 'Booking',
+              entityId: b.id,
+              details: JSON.stringify({
+                bookingNumber: b.bookingNumber,
+                scheduledEndTime: b.endTime.toISOString(),
+                completedAt: now.toISOString(),
+              }),
+            },
+          });
+        });
+
+        // Notify user
+        try {
+          await prisma.notification.create({
+            data: {
+              userId: b.userId,
+              title: `Booking Completed: ${b.resource.name}`,
+              message: `Your reservation #${b.bookingNumber} has concluded and was marked completed.`,
+              type: 'BOOKING',
+              link: '/my-bookings?tab=PAST',
+            },
+          });
+        } catch {}
+
+        completed++;
+      } catch (err: any) {
+        failed++;
+        errors.push({ id: b.id, error: err.message || 'Failed to auto-complete booking' });
+      }
+    }
+
+    return {
+      processed: expiredCheckedIn.length,
+      completed,
+      skipped: 0,
+      failed,
+      errors: errors.length > 0 ? errors : undefined,
+      message: `Successfully processed ${expiredCheckedIn.length} expired bookings: ${completed} completed, ${failed} failed.`,
+    };
+  }
+
+  /**
+   * My Bookings API: Provides paginated, tabbed bookings list with action eligibility.
+   */
+  static async getMyBookings(
+    user: BookingUserContext,
+    query: MyBookingsQuery
+  ): Promise<MyBookingsResponse> {
+    const tab: MyBookingsTab = query.tab || 'UPCOMING';
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(50, Math.max(1, query.limit || 10));
+    const skip = (page - 1) * limit;
+    const now = new Date();
+
+    // Query filters based on tab
+    let whereCondition: Prisma.BookingWhereInput = { userId: user.id };
+
+    if (tab === 'UPCOMING') {
+      whereCondition = {
+        userId: user.id,
+        status: { in: [BookingStatus.CONFIRMED, BookingStatus.APPROVED, BookingStatus.CHECKED_IN] },
+        endTime: { gte: now },
+      };
+    } else if (tab === 'PENDING') {
+      whereCondition = {
+        userId: user.id,
+        status: BookingStatus.PENDING,
+      };
+    } else if (tab === 'PAST') {
+      whereCondition = {
+        userId: user.id,
+        OR: [
+          { status: BookingStatus.COMPLETED },
+          { status: BookingStatus.NO_SHOW },
+          {
+            status: { in: [BookingStatus.CONFIRMED, BookingStatus.APPROVED, BookingStatus.CHECKED_IN] },
+            endTime: { lt: now },
+          },
+        ],
+      };
+    } else if (tab === 'CANCELLED') {
+      whereCondition = {
+        userId: user.id,
+        status: { in: [BookingStatus.CANCELLED, BookingStatus.REJECTED] },
+      };
+    }
+
+    // Fetch tab counts in parallel
+    const [upcomingCount, pendingCount, pastCount, cancelledCount, total, items] =
+      await Promise.all([
+        prisma.booking.count({
+          where: {
+            userId: user.id,
+            status: { in: [BookingStatus.CONFIRMED, BookingStatus.APPROVED, BookingStatus.CHECKED_IN] },
+            endTime: { gte: now },
+          },
+        }),
+        prisma.booking.count({
+          where: {
+            userId: user.id,
+            status: BookingStatus.PENDING,
+          },
+        }),
+        prisma.booking.count({
+          where: {
+            userId: user.id,
+            OR: [
+              { status: BookingStatus.COMPLETED },
+              { status: BookingStatus.NO_SHOW },
+              {
+                status: { in: [BookingStatus.CONFIRMED, BookingStatus.APPROVED, BookingStatus.CHECKED_IN] },
+                endTime: { lt: now },
+              },
+            ],
+          },
+        }),
+        prisma.booking.count({
+          where: {
+            userId: user.id,
+            status: { in: [BookingStatus.CANCELLED, BookingStatus.REJECTED] },
+          },
+        }),
+        prisma.booking.count({ where: whereCondition }),
+        prisma.booking.findMany({
+          where: whereCondition,
+          include: {
+            resource: true,
+            series: {
+              select: {
+                id: true,
+                frequency: true,
+                count: true,
+              },
+            },
+          },
+          orderBy: { startTime: tab === 'PAST' || tab === 'CANCELLED' ? 'desc' : 'asc' },
+          skip,
+          take: limit,
+        }),
+      ]);
+
+    const formattedBookings: BookingListItemDTO[] = items.map((b) => {
+      const eligibility = BookingService.computeBookingEligibility(b, user);
+      return {
+        id: b.id,
+        bookingNumber: b.bookingNumber,
+        userId: b.userId,
+        resourceId: b.resourceId,
+        startTime: b.startTime.toISOString(),
+        endTime: b.endTime.toISOString(),
+        actualEndTime: b.actualEndTime ? b.actualEndTime.toISOString() : null,
+        purpose: b.purpose,
+        activityType: b.activityType as any,
+        expectedAttendance: b.expectedAttendance,
+        priority: b.priority as any,
+        status: b.status as any,
+        checkInToken: b.checkInToken,
+        checkedInAt: b.checkedInAt ? b.checkedInAt.toISOString() : null,
+        releaseDeadline: b.releaseDeadline ? b.releaseDeadline.toISOString() : null,
+        approvalNotes: b.approvalNotes,
+        rejectionReason: b.rejectionReason,
+        departmentId: b.departmentId,
+        createdAt: b.createdAt.toISOString(),
+        updatedAt: b.updatedAt.toISOString(),
+        resource: b.resource as any,
+        series: b.series
+          ? {
+              id: b.series.id,
+              frequency: b.series.frequency,
+              totalCount: b.series.count,
+            }
+          : null,
+        eligibility,
+      };
+    });
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return {
+      bookings: formattedBookings,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+      tabCounts: {
+        upcoming: upcomingCount,
+        pending: pendingCount,
+        past: pastCount,
+        cancelled: cancelledCount,
+      },
+    };
   }
 
   /**

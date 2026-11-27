@@ -120,7 +120,29 @@ export const api = {
       return apiRequest(`/bookings${qs}`);
     },
     getById: (id: string) => apiRequest(`/bookings/${id}`),
-    cancel: (id: string, reason?: string) => apiRequest(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    my: (params?: Record<string, any>) => {
+      const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
+      return apiRequest<import('@lpu/shared').MyBookingsResponse>(`/bookings/my${qs}`);
+    },
+    reschedule: (id: string, body: import('@lpu/shared').RescheduleBookingRequest) =>
+      apiRequest<import('@lpu/shared').RescheduleBookingResponse>(`/bookings/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    endEarly: (id: string) =>
+      apiRequest<import('@lpu/shared').EndEarlyBookingResponse>(`/bookings/${id}/end-early`, {
+        method: 'POST',
+      }),
+    extend: (id: string, durationMinutes: number) =>
+      apiRequest<import('@lpu/shared').ExtendBookingResponse>(`/bookings/${id}/extend`, {
+        method: 'POST',
+        body: JSON.stringify({ durationMinutes }),
+      }),
+    cancel: (id: string, reason?: string, scope?: import('@lpu/shared').OccurrenceCancellationScope) =>
+      apiRequest<import('@lpu/shared').CancelBookingResponse>(`/bookings/${id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, scope }),
+      }),
     createSeries: (body: import('@lpu/shared').BookingSeriesRequest, idempotencyKey?: string) =>
       apiRequest<import('@lpu/shared').BookingSeriesResponse>('/bookings/series', {
         method: 'POST',

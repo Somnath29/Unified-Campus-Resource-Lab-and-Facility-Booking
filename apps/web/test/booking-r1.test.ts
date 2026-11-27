@@ -457,6 +457,15 @@ async function testDoubleBookingConcurrency() {
   assert(activeBookings.length === 1, `Exactly ONE active booking exists in PostgreSQL database (got ${activeBookings.length})`);
   assert(activeBookings[0].bookingNumber.startsWith('LPU-'), 'Booking number matches sequence format LPU-YYYY-000123');
   assert(activeBookings[0].checkInToken?.length === 6, 'Check-in token is valid 6-digit PIN');
+
+  // Clean up the created concurrent booking so it does not block subsequent test suites
+  await prisma.booking.deleteMany({
+    where: {
+      resourceId: testResource.id,
+      startTime: slotStart,
+      endTime: slotEnd,
+    },
+  });
 }
 
 /**

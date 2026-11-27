@@ -13,6 +13,7 @@ const envSchema = z.object({
     .or(z.boolean())
     .default(false),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  CANCELLATION_CUTOFF_MINUTES: z.coerce.number().int().nonnegative().default(60),
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_INITIAL_PASSWORD: z.string().min(8).optional(),
 });
