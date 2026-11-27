@@ -22,6 +22,8 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
         department: true,
         designation: true,
         phone: true,
+        isAway: true,
+        awayMessage: true,
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },

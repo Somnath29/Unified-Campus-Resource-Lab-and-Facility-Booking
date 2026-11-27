@@ -11,7 +11,9 @@ import checkinRoutes from './routes/checkin.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import adminRoutes from './routes/admin.routes';
 import notificationsRoutes from './routes/notifications.routes';
+import delegationsRoutes from './routes/delegations.routes';
 import { startAutoReleaseScheduler } from './services/autoReleaseService';
+import { startSlaEscalationScheduler } from './services/slaEscalation.service';
 
 dotenv.config();
 
@@ -57,6 +59,7 @@ app.use('/api/checkin', checkinRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/delegations', delegationsRoutes);
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -69,4 +72,6 @@ app.listen(PORT, () => {
   console.log(`🚀 LPU Campus Backend API server running on http://localhost:${PORT}`);
   // Start background auto-release service
   startAutoReleaseScheduler(Number(process.env.AUTO_RELEASE_CHECK_INTERVAL_MS) || 30000);
+  // Start background SLA escalation & expiry service
+  startSlaEscalationScheduler(Number(process.env.SLA_CHECK_INTERVAL_MS) || 30000);
 });

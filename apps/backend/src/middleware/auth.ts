@@ -12,6 +12,8 @@ export interface AuthenticatedUser {
   regNo?: string | null;
   designation?: string | null;
   avatarUrl?: string | null;
+  isAway?: boolean;
+  awayMessage?: string | null;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -45,6 +47,8 @@ export async function authenticateToken(
         regNo: true,
         designation: true,
         avatarUrl: true,
+        isAway: true,
+        awayMessage: true,
       },
     });
 

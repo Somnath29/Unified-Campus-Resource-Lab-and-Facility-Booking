@@ -39,13 +39,23 @@ export async function getAuthorizedDepartmentIds(user: AuthenticatedUser): Promi
 
   const now = new Date();
 
-  // 1. Fetch direct approver assignments
-  const assignments = await prisma.approverAssignment.findMany({
-    where: { userId: user.id },
-    select: { departmentId: true },
+  // Check if approver is set to Away
+  const userRecord = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { isAway: true },
   });
 
-  // 2. Fetch active delegations where the user is the delegate
+  // 1. Fetch direct approver assignments (only active if user is not away)
+  let directAssignments: { departmentId: string }[] = [];
+  if (!userRecord?.isAway) {
+    directAssignments = await prisma.approverAssignment.findMany({
+      where: { userId: user.id },
+      select: { departmentId: true },
+    });
+  }
+
+  // 2. Fetch active delegations where the user is the designated delegate
+  // A delegate can act even if they themselves have duties, but delegations granted to them apply
   const delegations = await prisma.delegation.findMany({
     where: {
       toUserId: user.id,
@@ -57,11 +67,11 @@ export async function getAuthorizedDepartmentIds(user: AuthenticatedUser): Promi
   });
 
   const departmentIds = new Set<string>();
-  assignments.forEach((a) => departmentIds.add(a.departmentId));
+  directAssignments.forEach((a) => departmentIds.add(a.departmentId));
   delegations.forEach((d) => departmentIds.add(d.departmentId));
 
-  // Fallback: Check user's own department if no explicit assignments exist
-  if (departmentIds.size === 0 && user.department) {
+  // Fallback: Check user's own department if no explicit assignments/delegations exist AND user is not away
+  if (departmentIds.size === 0 && user.department && !userRecord?.isAway) {
     const dept = await prisma.department.findFirst({
       where: {
         OR: [

@@ -230,6 +230,14 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
       : 15;
     const releaseDeadline = new Date(start.getTime() + autoReleaseMins * 60000);
 
+    // SLA Due At calculation based on Department Policy (default 24h)
+    const slaHours = policy?.approvalSlaHours !== undefined && policy?.approvalSlaHours !== null
+      ? policy.approvalSlaHours
+      : 24;
+    const slaDueAt = initialStatus === BookingStatus.PENDING
+      ? new Date(Date.now() + slaHours * 3600000)
+      : null;
+
     const booking = await prisma.booking.create({
       data: {
         bookingNumber,
@@ -244,6 +252,7 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
         status: initialStatus,
         checkInToken,
         releaseDeadline,
+        slaDueAt,
         departmentId: resource.departmentId || null,
       },
       include: {

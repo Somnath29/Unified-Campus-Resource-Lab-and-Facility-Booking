@@ -66,6 +66,8 @@ model User {
   designation         String?
   phone               String?
   avatarUrl           String?
+  isAway              Boolean              @default(false)
+  awayMessage         String?
   bookings            Booking[]
   decidedBookings     Booking[]            @relation("BookingDecidedBy")
   bookingComments     BookingComment[]
@@ -159,6 +161,8 @@ model Booking {
   decidedById        String?
   decidedBy          User?              @relation("BookingDecidedBy", fields: [decidedById], references: [id])
   slaDueAt           DateTime?
+  slaEscalated       Boolean            @default(false)
+  slaEscalatedAt     DateTime?
   comments           BookingComment[]
   approvalDecisions  ApprovalDecision[]
   waitlistEntries    WaitlistEntry[]
