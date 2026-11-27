@@ -9,7 +9,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (data: any) => Promise<void>;
+  register: (data: any) => Promise<any>;
   demoLogin: (role: UserRole) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -60,9 +60,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       const res = await api.auth.register(data);
-      setStoredToken(res.token);
-      setToken(res.token);
-      setUser(res.user);
+      if (res.token && res.user) {
+        setStoredToken(res.token);
+        setToken(res.token);
+        setUser(res.user);
+      }
+      return res;
     } finally {
       setIsLoading(false);
     }

@@ -38,6 +38,10 @@ Thumbs.db
 
 # Prisma & Database
 *.db
+
+# Playwright
+playwright-report/
+test-results/
 *.sqlite
 *.sqlite3
 

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import {
   Grid,
@@ -30,8 +31,15 @@ import {
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
-import { BookingModal } from '@/components/booking/BookingModal';
-import { ResourceDetailModal } from '@/components/resource/ResourceDetailModal';
+
+const BookingModal = dynamic(
+  () => import('@/components/booking/BookingModal').then((m) => m.BookingModal),
+  { ssr: false }
+);
+const ResourceDetailModal = dynamic(
+  () => import('@/components/resource/ResourceDetailModal').then((m) => m.ResourceDetailModal),
+  { ssr: false }
+);
 import { api } from '@/lib/api';
 import { ResourceDTO, ResourceListResponse, ResourceCategory } from '@lpu/shared';
 import { formatKolkataTimeRange } from '@/lib/timezone';
@@ -301,17 +309,17 @@ function ResourcesContent() {
           {/* Breadcrumbs & Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-xs text-gray-400 flex items-center gap-1.5 mb-1">
-                <Link href="/" className="hover:text-gray-600">
+              <div className="text-xs text-gray-600 flex items-center gap-1.5 mb-1">
+                <Link href="/" className="hover:text-gray-900">
                   Dashboard
                 </Link>
                 <span>›</span>
-                <span className="text-[#F58220] font-semibold">Find Resources</span>
+                <span className="text-[#B45309] font-semibold">Find Resources</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#292929] tracking-tight">
                 Find Campus Resources
               </h1>
-              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
                 Discover and reserve classrooms, laboratories, seminar halls, sports facilities, and equipment.
               </p>
             </div>
@@ -338,11 +346,11 @@ function ResourcesContent() {
 
           {/* Smart Tip Banner */}
           <div className="p-4 bg-[#FFF4EA] border border-[#FED7AA] rounded-2xl flex items-center gap-3 text-xs text-[#292929]">
-            <div className="w-8 h-8 rounded-xl bg-[#F58220] text-white flex items-center justify-center shrink-0 shadow-sm">
+            <div className="w-8 h-8 rounded-xl bg-[#C2410C] text-white flex items-center justify-center shrink-0 shadow-sm">
               <Lightbulb className="w-4 h-4" />
             </div>
             <div>
-              <span className="font-extrabold text-[#F58220]">Real-Time Scheduling:</span> Resources
+              <span className="font-extrabold text-[#B45309]">Real-Time Scheduling:</span> Resources
               are synchronized against official university timetables and existing reservations.
               Choose a specific date and time to filter rooms by live availability.
             </div>
@@ -442,7 +450,7 @@ function ResourcesContent() {
                 <button
                   type="button"
                   onClick={handleClearAllFilters}
-                  className="text-xs text-[#F58220] hover:text-[#E06D0C] font-bold"
+                  className="text-xs text-[#B45309] hover:text-[#92400E] font-bold"
                 >
                   Clear All
                 </button>
@@ -490,11 +498,11 @@ function ResourcesContent() {
                         onClick={() => handleCategorySelect(c.value)}
                         className={`py-2 px-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 border transition text-left ${
                           isSelected
-                            ? 'bg-[#FFF4EA] border-[#F58220] text-[#F58220] font-bold shadow-sm'
-                            : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                            ? 'bg-[#FFF4EA] border-[#F58220] text-[#B45309] font-bold shadow-sm'
+                            : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300'
                         }`}
                       >
-                        <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-[#F58220]' : 'text-gray-400'}`} />
+                        <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-[#B45309]' : 'text-gray-500'}`} />
                         <span className="truncate">{c.label}</span>
                       </button>
                     );
@@ -557,6 +565,7 @@ function ResourcesContent() {
                 </label>
                 <input
                   type="date"
+                  aria-label="Availability date"
                   value={urlDate}
                   onChange={(e) => updateQuery({ date: e.target.value || null })}
                   className="w-full px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs"
@@ -564,12 +573,14 @@ function ResourcesContent() {
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     type="time"
+                    aria-label="Availability start time"
                     value={urlStart}
                     onChange={(e) => updateQuery({ start: e.target.value || null })}
                     className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded-lg text-xs"
                   />
                   <input
                     type="time"
+                    aria-label="Availability end time"
                     value={urlEnd}
                     onChange={(e) => updateQuery({ end: e.target.value || null })}
                     className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded-lg text-xs"
@@ -621,8 +632,8 @@ function ResourcesContent() {
                       aria-pressed={viewMode === 'grid'}
                       className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition ${
                         viewMode === 'grid'
-                          ? 'bg-[#F58220] text-white shadow-sm'
-                          : 'text-gray-600 hover:text-gray-900'
+                          ? 'bg-[#C2410C] text-white shadow-sm'
+                          : 'text-gray-700 hover:text-gray-900'
                       }`}
                     >
                       <Grid className="w-3.5 h-3.5" />
@@ -634,7 +645,7 @@ function ResourcesContent() {
                       aria-pressed={viewMode === 'list'}
                       className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition ${
                         viewMode === 'list'
-                          ? 'bg-[#F58220] text-white shadow-sm'
+                          ? 'bg-[#C2410C] text-white shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
                       }`}
                     >
@@ -645,7 +656,7 @@ function ResourcesContent() {
 
                   {/* Sort Selector */}
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className="text-gray-400 hidden sm:inline">Sort:</span>
+                    <span className="text-gray-600 hidden sm:inline">Sort:</span>
                     <select
                       value={selectedSortIndex !== -1 ? selectedSortIndex : 0}
                       onChange={handleSortChange}

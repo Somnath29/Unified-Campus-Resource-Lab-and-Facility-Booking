@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {
   Calendar,
   Clock,
@@ -28,11 +29,27 @@ import {
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
-import { RescheduleModal } from '@/components/booking/RescheduleModal';
-import { CancelBookingModal } from '@/components/booking/CancelBookingModal';
-import { ExtendBookingModal } from '@/components/booking/ExtendBookingModal';
-import { EndEarlyModal } from '@/components/booking/EndEarlyModal';
-import { BookingQrModal } from '@/components/booking/BookingQrModal';
+
+const RescheduleModal = dynamic(
+  () => import('@/components/booking/RescheduleModal').then((m) => m.RescheduleModal),
+  { ssr: false }
+);
+const CancelBookingModal = dynamic(
+  () => import('@/components/booking/CancelBookingModal').then((m) => m.CancelBookingModal),
+  { ssr: false }
+);
+const ExtendBookingModal = dynamic(
+  () => import('@/components/booking/ExtendBookingModal').then((m) => m.ExtendBookingModal),
+  { ssr: false }
+);
+const EndEarlyModal = dynamic(
+  () => import('@/components/booking/EndEarlyModal').then((m) => m.EndEarlyModal),
+  { ssr: false }
+);
+const BookingQrModal = dynamic(
+  () => import('@/components/booking/BookingQrModal').then((m) => m.BookingQrModal),
+  { ssr: false }
+);
 import { api } from '@/lib/api';
 import { BookingListItemDTO, MyBookingsTab, WaitlistEntryDTO, WaitlistStatus } from '@lpu/shared';
 import { formatKolkataDateTime, formatKolkataTimeRange } from '@/lib/timezone';
@@ -68,7 +85,7 @@ function OfferCountdownTimer({
   }
 
   return (
-    <span className="font-mono font-extrabold text-[#F58220] tabular-nums">
+    <span className="font-mono font-extrabold text-[#9A3412] tabular-nums">
       {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
     </span>
   );
@@ -286,7 +303,7 @@ export default function MyBookingsPage() {
       case 'NO_SHOW':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-700 border border-gray-300">
-            <AlertCircle className="w-3 h-3 text-gray-500" /> No Show
+            <AlertCircle className="w-3 h-3 text-gray-600" /> No Show
           </span>
         );
       default:
@@ -303,19 +320,19 @@ export default function MyBookingsPage() {
     switch (status) {
       case 'WAITING':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-[#1976B9] border border-blue-200">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
             <Clock className="w-3 h-3" /> Waiting in Queue
           </span>
         );
       case 'OFFERED':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#FFF4EA] text-[#F58220] border border-[#FED7AA] animate-pulse">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#FFF4EA] text-[#9A3412] border border-[#FED7AA] animate-pulse">
             <Sparkles className="w-3 h-3" /> Active Offer Available!
           </span>
         );
       case 'EXPIRED':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-500 border border-gray-200">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-600 border border-gray-200">
             <XCircle className="w-3 h-3" /> Offer Expired
           </span>
         );
@@ -328,7 +345,7 @@ export default function MyBookingsPage() {
       case 'WITHDRAWN':
       default:
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-400 border border-gray-200">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-600 border border-gray-200">
             <Trash2 className="w-3 h-3" /> Withdrawn
           </span>
         );
@@ -346,7 +363,7 @@ export default function MyBookingsPage() {
           {/* Toast Notification */}
           {successToast && (
             <div className="fixed top-5 right-5 z-50 bg-[#292929] text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 border border-gray-700 animate-in fade-in slide-in-from-top-2">
-              <CheckCircle2 className="w-5 h-5 text-[#F58220]" />
+              <CheckCircle2 className="w-5 h-5 text-[#9A3412]" />
               <span className="text-xs font-semibold">{successToast}</span>
             </div>
           )}
@@ -354,17 +371,17 @@ export default function MyBookingsPage() {
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-xs text-gray-400 flex items-center gap-1.5 mb-1">
+              <div className="text-xs text-gray-600 flex items-center gap-1.5 mb-1">
                 <Link href="/" className="hover:text-gray-600">
                   Dashboard
                 </Link>
                 <span>›</span>
-                <span className="text-[#F58220] font-semibold">My Bookings & Waitlist</span>
+                <span className="text-[#9A3412] font-semibold">My Bookings & Waitlist</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#292929] tracking-tight">
                 My Bookings & Waitlist
               </h1>
-              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
                 Manage upcoming sessions, track pending approvals, and accept waitlist offers.
               </p>
             </div>
@@ -374,12 +391,12 @@ export default function MyBookingsPage() {
                 href="/calendar"
                 className="px-3.5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5"
               >
-                <CalendarRange className="w-4 h-4 text-[#F58220]" />
+                <CalendarRange className="w-4 h-4 text-[#9A3412]" />
                 <span>Availability Calendar</span>
               </Link>
               <Link
                 href="/resources"
-                className="px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5"
+                className="px-4 py-2 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5"
               >
                 <Plus className="w-4 h-4" />
                 <span>New Reservation</span>
@@ -401,15 +418,15 @@ export default function MyBookingsPage() {
                 onClick={() => handleTabSwitch(tab.id)}
                 className={`flex items-center gap-2 py-3 px-4 border-b-2 text-xs font-bold transition whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'border-[#F58220] text-[#F58220]'
-                    : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'
+                    ? 'border-[#F58220] text-[#9A3412]'
+                    : 'border-transparent text-gray-600 hover:text-gray-800 hover:border-gray-300'
                 }`}
               >
                 <span>{tab.label}</span>
                 <span
                   className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-full ${
                     activeTab === tab.id
-                      ? 'bg-[#F58220]/10 text-[#F58220]'
+                      ? 'bg-[#C2410C]/10 text-[#9A3412]'
                       : 'bg-gray-200/70 text-gray-600'
                   }`}
                 >
@@ -453,18 +470,18 @@ export default function MyBookingsPage() {
             /* Waitlist View */
             waitlistEntries.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center space-y-4">
-                <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto text-gray-400">
+                <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto text-gray-600">
                   <Clock className="w-6 h-6" />
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-gray-800">No waitlist entries found</h3>
-                  <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+                  <p className="text-xs text-gray-600 mt-1 max-w-sm mx-auto">
                     You are not currently in line for any booked slots. Browse the calendar to join the waitlist for occupied facilities.
                   </p>
                 </div>
                 <Link
                   href="/calendar"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-bold rounded-xl shadow-sm transition"
                 >
                   <CalendarRange className="w-4 h-4" />
                   <span>Check Availability Calendar</span>
@@ -494,13 +511,13 @@ export default function MyBookingsPage() {
                             </h2>
                             {getWaitlistStatusBadge(entry.status)}
                             {isWaiting && entry.queuePosition && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100/70 text-[#1976B9] border border-blue-200">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100/70 text-blue-700 border border-blue-200">
                                 #{entry.queuePosition} in Queue
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                            <MapPin className="w-3.5 h-3.5 text-[#F58220] shrink-0" />
+                          <p className="text-xs text-gray-600 flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-[#9A3412] shrink-0" />
                             <span>
                               {entry.resource?.building} • {entry.resource?.floor || 'Ground Floor'} • Capacity: {entry.resource?.capacity}
                             </span>
@@ -510,9 +527,9 @@ export default function MyBookingsPage() {
                         {/* Active Offer Countdown Indicator */}
                         {isOffered && entry.offerExpiresAt && (
                           <div className="flex items-center gap-2 p-2.5 bg-[#FFF4EA] border border-[#FED7AA] rounded-xl text-xs">
-                            <Timer className="w-4 h-4 text-[#F58220] shrink-0" />
+                            <Timer className="w-4 h-4 text-[#9A3412] shrink-0" />
                             <div>
-                              <div className="text-[10px] uppercase font-bold text-gray-500">Time to Accept</div>
+                              <div className="text-[10px] uppercase font-bold text-gray-600">Time to Accept</div>
                               <OfferCountdownTimer
                                 offerExpiresAt={entry.offerExpiresAt}
                                 onExpire={() => fetchWaitlist(page)}
@@ -525,9 +542,9 @@ export default function MyBookingsPage() {
                       {/* Middle Details Box */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-[#F5F5F5]/70 rounded-xl border border-gray-200/60 text-xs text-gray-600">
                         <div className="flex items-center gap-2">
-                          <Calendar className="w-4 h-4 text-[#F58220] shrink-0" />
+                          <Calendar className="w-4 h-4 text-[#9A3412] shrink-0" />
                           <div>
-                            <div className="text-[10px] uppercase font-bold text-gray-400">Requested Slot</div>
+                            <div className="text-[10px] uppercase font-bold text-gray-600">Requested Slot</div>
                             <div className="font-semibold text-gray-800">
                               {formatKolkataDateTime(entry.startTime)}
                             </div>
@@ -535,9 +552,9 @@ export default function MyBookingsPage() {
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-[#1976B9] shrink-0" />
+                          <Clock className="w-4 h-4 text-blue-700 shrink-0" />
                           <div>
-                            <div className="text-[10px] uppercase font-bold text-gray-400">Duration Range</div>
+                            <div className="text-[10px] uppercase font-bold text-gray-600">Duration Range</div>
                             <div className="font-semibold text-gray-800">
                               {formatKolkataTimeRange(entry.startTime, entry.endTime)}
                             </div>
@@ -547,7 +564,7 @@ export default function MyBookingsPage() {
 
                       {/* Action Bar */}
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
-                        <div className="text-[11px] text-gray-400">
+                        <div className="text-[11px] text-gray-600">
                           Joined queue on {new Date(entry.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
                         </div>
 
@@ -557,7 +574,7 @@ export default function MyBookingsPage() {
                               <button
                                 onClick={() => handleAcceptOffer(entry.id)}
                                 disabled={isAcceptingOffer === entry.id}
-                                className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-[#F58220] hover:bg-[#E06D0C] text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50"
+                                className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-[#C2410C] hover:bg-[#9A3412] text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50"
                               >
                                 {isAcceptingOffer === entry.id ? (
                                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -596,7 +613,7 @@ export default function MyBookingsPage() {
                 {/* Server-Side Pagination Bar for Waitlist */}
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between p-4 bg-white rounded-2xl border border-gray-100 shadow-sm text-xs">
-                    <div className="text-gray-500 font-medium">
+                    <div className="text-gray-600 font-medium">
                       Showing {(page - 1) * limit + 1} - {Math.min(page * limit, totalCount)} of {totalCount} waitlist entries
                     </div>
 
@@ -626,14 +643,14 @@ export default function MyBookingsPage() {
           ) : bookings.length === 0 ? (
             /* Bookings Empty State */
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center space-y-4">
-              <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto text-gray-400">
+              <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto text-gray-600">
                 <CalendarRange className="w-6 h-6" />
               </div>
               <div>
                 <h3 className="text-sm font-bold text-gray-800">
                   No {activeTab.toLowerCase()} bookings found
                 </h3>
-                <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+                <p className="text-xs text-gray-600 mt-1 max-w-sm mx-auto">
                   {activeTab === 'UPCOMING'
                     ? "You don't have any upcoming reservations scheduled. Browse campus resources to reserve a room."
                     : activeTab === 'PENDING'
@@ -646,7 +663,7 @@ export default function MyBookingsPage() {
               {activeTab === 'UPCOMING' && (
                 <Link
                   href="/resources"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-bold rounded-xl shadow-sm transition"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Discover Venues</span>
@@ -674,13 +691,13 @@ export default function MyBookingsPage() {
                           </h2>
                           {getStatusBadge(booking.status)}
                           {isRecurring && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-orange-50 text-[#F58220] border border-orange-200">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-orange-50 text-[#9A3412] border border-orange-200">
                               <Repeat className="w-3 h-3" /> Recurring Series
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                          <MapPin className="w-3.5 h-3.5 text-[#F58220] shrink-0" />
+                        <p className="text-xs text-gray-600 flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-[#9A3412] shrink-0" />
                           <span>
                             {booking.resource?.building} • {booking.resource?.floor || 'Ground Floor'} • Capacity: {booking.resource?.capacity}
                           </span>
@@ -691,7 +708,7 @@ export default function MyBookingsPage() {
                         <div className="font-mono font-bold text-gray-700">
                           #{booking.bookingNumber}
                         </div>
-                        <div className="text-[11px] text-gray-400">
+                        <div className="text-[11px] text-gray-600">
                           Booked on {new Date(booking.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
                         </div>
                       </div>
@@ -700,9 +717,9 @@ export default function MyBookingsPage() {
                     {/* Middle Details Box */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-[#F5F5F5]/70 rounded-xl border border-gray-200/60 text-xs text-gray-600">
                       <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-[#F58220] shrink-0" />
+                        <Calendar className="w-4 h-4 text-[#9A3412] shrink-0" />
                         <div>
-                          <div className="text-[10px] uppercase font-bold text-gray-400">Date & Slot</div>
+                          <div className="text-[10px] uppercase font-bold text-gray-600">Date & Slot</div>
                           <div className="font-semibold text-gray-800">
                             {formatKolkataDateTime(booking.startTime)}
                           </div>
@@ -710,9 +727,9 @@ export default function MyBookingsPage() {
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-[#1976B9] shrink-0" />
+                        <Clock className="w-4 h-4 text-blue-700 shrink-0" />
                         <div>
-                          <div className="text-[10px] uppercase font-bold text-gray-400">Time Range</div>
+                          <div className="text-[10px] uppercase font-bold text-gray-600">Time Range</div>
                           <div className="font-semibold text-gray-800">
                             {formatKolkataTimeRange(booking.startTime, booking.endTime)}
                           </div>
@@ -722,7 +739,7 @@ export default function MyBookingsPage() {
                       <div className="flex items-center gap-2">
                         <Users className="w-4 h-4 text-emerald-600 shrink-0" />
                         <div>
-                          <div className="text-[10px] uppercase font-bold text-gray-400">Attendance & Activity</div>
+                          <div className="text-[10px] uppercase font-bold text-gray-600">Attendance & Activity</div>
                           <div className="font-semibold text-gray-800">
                             {booking.expectedAttendance} attendees • {booking.activityType.replace(/_/g, ' ')}
                           </div>
@@ -761,14 +778,14 @@ export default function MyBookingsPage() {
                             onClick={() => setQrTarget(booking)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-xs font-bold transition"
                           >
-                            <QrCode className="w-3.5 h-3.5 text-[#F58220]" />
+                            <QrCode className="w-3.5 h-3.5 text-[#9A3412]" />
                             <span>Show Check-In QR</span>
                           </button>
                         )}
                         <a
                           href={`/api/bookings/${booking.id}/calendar.ics`}
                           download={`${booking.bookingNumber}.ics`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[#1976B9] rounded-xl text-xs font-bold transition"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 rounded-xl text-xs font-bold transition"
                         >
                           <Calendar className="w-3.5 h-3.5" />
                           <span>Add to Calendar (.ics)</span>
@@ -781,7 +798,7 @@ export default function MyBookingsPage() {
                         {elig?.canExtend && (
                           <button
                             onClick={() => setExtendTarget(booking)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[#1976B9] rounded-xl text-xs font-bold transition"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 rounded-xl text-xs font-bold transition"
                           >
                             <PlusCircle className="w-3.5 h-3.5" />
                             <span>Extend</span>
@@ -805,7 +822,7 @@ export default function MyBookingsPage() {
                             onClick={() => setRescheduleTarget(booking)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-xs font-bold transition"
                           >
-                            <RefreshCw className="w-3.5 h-3.5 text-[#F58220]" />
+                            <RefreshCw className="w-3.5 h-3.5 text-[#9A3412]" />
                             <span>Reschedule</span>
                           </button>
                         )}
@@ -821,7 +838,7 @@ export default function MyBookingsPage() {
                           </button>
                         ) : elig?.cancellationCutoffPassed && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' ? (
                           <span
-                            className="text-[11px] text-gray-400 italic"
+                            className="text-[11px] text-gray-600 italic"
                             title={`Cutoff (${elig.cancellationCutoffMinutes}m) passed`}
                           >
                             Cancellation closed
@@ -836,7 +853,7 @@ export default function MyBookingsPage() {
               {/* Server-Side Pagination Bar */}
               {totalPages > 1 && (
                 <div className="flex items-center justify-between p-4 bg-white rounded-2xl border border-gray-100 shadow-sm text-xs">
-                  <div className="text-gray-500 font-medium">
+                  <div className="text-gray-600 font-medium">
                     Showing {(page - 1) * limit + 1} - {Math.min(page * limit, totalCount)} of {totalCount} reservations
                   </div>
 

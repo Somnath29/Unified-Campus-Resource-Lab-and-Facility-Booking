@@ -30,6 +30,10 @@ export const POST = withErrorHandling(async (request: Request) => {
     return fail(401, 'Invalid university email or password.');
   }
 
+  if (!user.emailVerified) {
+    return fail(403, 'Please verify your university email address before signing in.');
+  }
+
   const { token } = await createSessionAndToken({
     user: {
       id: user.id,

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import {
   Calendar as CalendarIcon,
@@ -23,8 +24,15 @@ import {
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
-import { BookingModal } from '@/components/booking/BookingModal';
-import { CheckInModal } from '@/components/booking/CheckInModal';
+
+const BookingModal = dynamic(
+  () => import('@/components/booking/BookingModal').then((m) => m.BookingModal),
+  { ssr: false }
+);
+const CheckInModal = dynamic(
+  () => import('@/components/booking/CheckInModal').then((m) => m.CheckInModal),
+  { ssr: false }
+);
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 import {

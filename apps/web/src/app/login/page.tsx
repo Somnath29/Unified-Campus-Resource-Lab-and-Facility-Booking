@@ -34,17 +34,20 @@ export default function LoginPage() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [verificationNotice, setVerificationNotice] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg(null);
+    setVerificationNotice(null);
 
     try {
       if (mode === 'LOGIN') {
         await login(email, password);
+        router.push('/');
       } else {
-        await register({
+        const res = await register({
           email,
           password,
           name,
@@ -52,8 +55,16 @@ export default function LoginPage() {
           regNo,
           department,
         });
+        if (res?.requiresEmailVerification) {
+          setVerificationNotice(
+            res.message ||
+              'Account created! Please check your university email for the verification link before signing in.'
+          );
+          setMode('LOGIN');
+        } else {
+          router.push('/');
+        }
       }
-      router.push('/');
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication failed. Please check credentials.');
     } finally {
@@ -179,9 +190,19 @@ export default function LoginPage() {
             </p>
           </div>
 
+          {/* Verification Notice */}
+          {verificationNotice && (
+            <div
+              role="status"
+              className="mb-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium"
+            >
+              {verificationNotice}
+            </div>
+          )}
+
           {/* Error Message */}
           {errorMsg && (
-            <div className="mb-4 p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
+            <div role="alert" className="mb-4 p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
               {errorMsg}
             </div>
           )}
@@ -189,39 +210,39 @@ export default function LoginPage() {
           {/* One-Click Fast Role Sign-in (Evaluator Showcase) */}
           <div className="mb-6 p-3.5 bg-[#FFF4EA] border border-[#FED7AA] rounded-2xl">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-bold text-[#F58220] uppercase tracking-wider">
+              <span className="text-[11px] font-bold text-[#B45309] uppercase tracking-wider">
                 Instant Demo Access
               </span>
-              <span className="text-[10px] text-gray-500">1-Click Sign In</span>
+              <span className="text-[10px] text-gray-700 font-medium">1-Click Sign In</span>
             </div>
             <div className="grid grid-cols-2 gap-1.5 text-xs">
               <button
                 type="button"
                 onClick={() => handleQuickDemo('STUDENT')}
-                className="py-1.5 px-2 bg-white hover:bg-[#F58220] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
+                className="py-1.5 px-2 bg-white hover:bg-[#C2410C] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
               >
-                🎓 Student <span className="text-[10px] block font-normal text-gray-400">Ketan (CSE)</span>
+                🎓 Student <span className="text-[10px] block font-normal text-gray-600">Ketan (CSE)</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleQuickDemo('FACULTY')}
-                className="py-1.5 px-2 bg-white hover:bg-[#F58220] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
+                className="py-1.5 px-2 bg-white hover:bg-[#C2410C] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
               >
-                👨‍🏫 Faculty <span className="text-[10px] block font-normal text-gray-400">Dr. Arvind</span>
+                👨‍🏫 Faculty <span className="text-[10px] block font-normal text-gray-600">Dr. Arvind</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleQuickDemo('DEPARTMENT_APPROVER')}
-                className="py-1.5 px-2 bg-white hover:bg-[#F58220] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
+                className="py-1.5 px-2 bg-white hover:bg-[#C2410C] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
               >
-                📋 Approver <span className="text-[10px] block font-normal text-gray-400">Prof. Meenakshi</span>
+                📋 Approver <span className="text-[10px] block font-normal text-gray-600">Prof. Meenakshi</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleQuickDemo('ADMINISTRATOR')}
-                className="py-1.5 px-2 bg-white hover:bg-[#F58220] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
+                className="py-1.5 px-2 bg-white hover:bg-[#C2410C] hover:text-white text-gray-800 font-semibold rounded-lg shadow-sm border border-orange-100 transition text-left"
               >
-                ⚡ Admin <span className="text-[10px] block font-normal text-gray-400">Rajesh Verma</span>
+                ⚡ Admin <span className="text-[10px] block font-normal text-gray-600">Rajesh Verma</span>
               </button>
             </div>
           </div>
@@ -293,7 +314,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => alert('For password reset, please contact LPU IT Helpdesk (Block 30) or use instant demo logins above.')}
-                    className="text-xs font-semibold text-[#F58220] hover:underline"
+                    className="text-xs font-semibold text-[#B45309] hover:underline"
                   >
                     Forgot password?
                   </button>
@@ -312,7 +333,8 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -339,7 +361,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-3 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+              className="w-full py-3 bg-[#C2410C] hover:bg-[#9A3412] text-white font-bold rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm disabled:opacity-50"
             >
               {isLoading ? (
                 <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

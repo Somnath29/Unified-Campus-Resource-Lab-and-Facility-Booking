@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import {
   Calendar as CalendarIcon,
@@ -26,8 +27,15 @@ import {
 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
-import { BookingModal } from '@/components/booking/BookingModal';
-import { ResourceDetailModal } from '@/components/resource/ResourceDetailModal';
+
+const BookingModal = dynamic(
+  () => import('@/components/booking/BookingModal').then((m) => m.BookingModal),
+  { ssr: false }
+);
+const ResourceDetailModal = dynamic(
+  () => import('@/components/resource/ResourceDetailModal').then((m) => m.ResourceDetailModal),
+  { ssr: false }
+);
 import { api } from '@/lib/api';
 import {
   ResourceDTO,
@@ -256,7 +264,7 @@ function CalendarContent() {
               type="button"
               onClick={() => handleReserveSlot(slot)}
               aria-label={`Reserve available slot ${formatSlotTimeRange(slot.startTime, slot.endTime)}`}
-              className="px-3 py-1 bg-[#F58220] hover:bg-[#E06D0C] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1 shrink-0"
+              className="px-3 py-1 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1 shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Reserve</span>
@@ -268,10 +276,10 @@ function CalendarContent() {
         return (
           <div className="flex items-center justify-between gap-2 w-full">
             <div className="flex items-center gap-2 text-xs font-bold text-orange-950">
-              <Lock className="w-4 h-4 text-[#F58220] shrink-0" />
+              <Lock className="w-4 h-4 text-[#9A3412] shrink-0" />
               <div>
                 <span>Reserved</span>
-                <span className="text-[10px] text-gray-500 font-normal block">
+                <span className="text-[10px] text-gray-600 font-normal block">
                   {slot.reason || 'Booked for an approved event'}
                 </span>
               </div>
@@ -281,7 +289,7 @@ function CalendarContent() {
               onClick={() => handleJoinWaitlist(slot)}
               disabled={isWaitlistJoining}
               aria-label={`Join waitlist for slot ${formatSlotTimeRange(slot.startTime, slot.endTime)}`}
-              className="px-2.5 py-1 bg-amber-500/10 hover:bg-[#F58220] text-[#F58220] hover:text-white border border-[#F58220]/30 hover:border-[#F58220] text-xs font-bold rounded-xl transition flex items-center gap-1 shrink-0 disabled:opacity-50"
+              className="px-2.5 py-1 bg-amber-500/10 hover:bg-[#C2410C] text-[#9A3412] hover:text-white border border-[#F58220]/30 hover:border-[#F58220] text-xs font-bold rounded-xl transition flex items-center gap-1 shrink-0 disabled:opacity-50"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>Join Waitlist</span>
@@ -331,8 +339,8 @@ function CalendarContent() {
       case 'outside_hours':
       default:
         return (
-          <div className="flex items-center gap-2 text-xs text-gray-500 font-semibold">
-            <Moon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+          <div className="flex items-center gap-2 text-xs text-gray-600 font-semibold">
+            <Moon className="w-3.5 h-3.5 text-gray-600 shrink-0" />
             <span>{slot.reason || 'Outside facility operating hours'}</span>
           </div>
         );
@@ -354,7 +362,7 @@ function CalendarContent() {
         return 'bg-purple-50/70 border-purple-200';
       case 'outside_hours':
       default:
-        return 'bg-gray-50/80 border-gray-200 opacity-60';
+        return 'bg-gray-100/90 border-gray-200';
     }
   };
 
@@ -375,7 +383,7 @@ function CalendarContent() {
           {/* Header & Breadcrumb */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-xs text-gray-400 flex items-center gap-1.5 mb-1">
+              <div className="text-xs text-gray-600 flex items-center gap-1.5 mb-1">
                 <Link href="/" className="hover:text-gray-600">
                   Dashboard
                 </Link>
@@ -384,12 +392,12 @@ function CalendarContent() {
                   Resources
                 </Link>
                 <span>›</span>
-                <span className="text-[#F58220] font-semibold">Live Calendar</span>
+                <span className="text-[#9A3412] font-semibold">Live Calendar</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#292929] tracking-tight">
                 Resource Availability Calendar
               </h1>
-              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
                 Inspect live 30-minute availability slots, academic classes, and reserved periods.
               </p>
             </div>
@@ -406,7 +414,7 @@ function CalendarContent() {
                 <button
                   type="button"
                   onClick={() => setIsDetailModalOpen(true)}
-                  className="px-3.5 py-2 bg-[#FFF4EA] border border-[#FED7AA] text-[#F58220] text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5 hover:bg-[#FED7AA]/30"
+                  className="px-3.5 py-2 bg-[#FFF4EA] border border-[#FED7AA] text-[#9A3412] text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5 hover:bg-[#FED7AA]/30"
                 >
                   <Info className="w-4 h-4" />
                   <span>Facility Info</span>
@@ -496,7 +504,7 @@ function CalendarContent() {
           <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-gray-100">
               <div className="flex items-center gap-2">
-                <CalendarIcon className="w-4 h-4 text-[#F58220]" />
+                <CalendarIcon className="w-4 h-4 text-[#9A3412]" />
                 <span className="text-sm font-extrabold text-[#292929]">
                   {formatKolkataDate(selectedDate, { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
                 </span>
@@ -508,7 +516,7 @@ function CalendarContent() {
               </div>
 
               {currentResource && (
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-gray-600">
                   Operating Hours:{' '}
                   <span className="font-bold text-gray-800">
                     {currentResource.operatingHours || '08:00 AM - 08:00 PM'}
@@ -525,7 +533,7 @@ function CalendarContent() {
                 <span>Available</span>
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-[#F58220] border border-[#E06D0C]" />
+                <span className="w-3 h-3 rounded-full bg-[#C2410C] border border-[#E06D0C]" />
                 <span>Booked</span>
               </span>
               <span className="flex items-center gap-1.5">
@@ -584,11 +592,11 @@ function CalendarContent() {
                   <h2 className="text-base font-extrabold text-[#292929]">
                     Daily 30-Minute Schedule
                   </h2>
-                  <p className="text-xs text-gray-500 mt-0.5">
+                  <p className="text-xs text-gray-600 mt-0.5">
                     {availability.resourceName} {currentResource?.code ? `(${currentResource.code})` : ''} • Asia/Kolkata
                   </p>
                 </div>
-                <div className="text-xs text-gray-400 font-mono">
+                <div className="text-xs text-gray-600 font-mono">
                   {availability.slots.filter((s) => s.status === 'available').length} Open Slots
                 </div>
               </div>
@@ -604,7 +612,7 @@ function CalendarContent() {
                     >
                       {/* Time Column */}
                       <div className="flex items-center gap-2 text-xs font-mono font-bold text-gray-800 shrink-0 min-w-[170px]">
-                        <Clock className="w-3.5 h-3.5 text-gray-400" />
+                        <Clock className="w-3.5 h-3.5 text-gray-600" />
                         <span>{formatSlotTimeRange(slot.startTime, slot.endTime)}</span>
                       </div>
 
@@ -623,7 +631,7 @@ function CalendarContent() {
           {!isLoading && !errorMessage && eventsForSelectedDate.length > 0 && (
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 space-y-4">
               <h3 className="text-sm font-extrabold text-gray-900 flex items-center gap-2">
-                <BookOpen className="w-4 h-4 text-[#F58220]" />
+                <BookOpen className="w-4 h-4 text-[#9A3412]" />
                 <span>Scheduled Events & Classes on This Day</span>
               </h3>
 

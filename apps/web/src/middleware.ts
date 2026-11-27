@@ -57,6 +57,10 @@ export function middleware(request: NextRequest) {
   // 2. Page protection: redirect visitors without session cookie to /login
   const token = request.cookies.get('token')?.value;
 
+  if (pathname === '/verify-email') {
+    return NextResponse.next();
+  }
+
   if (pathname === '/login') {
     if (token) {
       return NextResponse.redirect(new URL('/', request.url));

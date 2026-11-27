@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -16,6 +16,7 @@ import {
   BarChart3,
   ChevronRight,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { UserRole } from '@lpu/shared';
@@ -28,6 +29,17 @@ interface SidebarProps {
 export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 3 }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout, demoLogin } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setMobileOpen((prev) => !prev);
+    window.addEventListener('toggle-mobile-sidebar', handler);
+    return () => window.removeEventListener('toggle-mobile-sidebar', handler);
+  }, []);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   const isRoleElevated = user?.role === 'DEPARTMENT_APPROVER' || user?.role === 'ADMINISTRATOR';
 
@@ -56,11 +68,24 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
   ];
 
   return (
-    <aside className="w-64 bg-[#161922] text-white flex flex-col justify-between shrink-0 h-screen sticky top-0 select-none border-r border-[#262B38] z-30">
-      {/* Top Header & Branding */}
-      <div>
-        <div className="p-5 pb-6 border-b border-[#232734]">
-          <Link href="/" className="flex items-center gap-3">
+    <>
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        aria-label="Primary navigation"
+        className={`${
+          mobileOpen ? 'fixed inset-y-0 left-0 flex z-50' : 'hidden lg:flex'
+        } w-64 bg-[#161922] text-white flex-col justify-between shrink-0 h-screen lg:sticky top-0 select-none border-r border-[#262B38] z-30 overflow-y-auto`}
+      >
+        {/* Top Header & Branding */}
+        <div>
+          <div className="p-5 pb-6 border-b border-[#232734] flex items-center justify-between">
+            <Link href="/" className="flex items-center gap-3">
             {/* LPU Sun Rays Emblem */}
             <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-[#EA580C] to-[#F58220] flex items-center justify-center p-2 shadow-md">
               <svg viewBox="0 0 24 24" fill="none" className="w-7 h-7 text-white">
@@ -89,6 +114,16 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
               </div>
             </div>
           </Link>
+          {mobileOpen && (
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Close navigation menu"
+              className="lg:hidden p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-[#202430]"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Navigation Links */}
@@ -103,7 +138,7 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
                 href={item.href}
                 className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all duration-150 ${
                   isActive
-                    ? 'bg-[#F58220] text-white shadow-sm font-semibold'
+                    ? 'bg-[#C2410C] text-white shadow-sm font-semibold'
                     : 'text-gray-300 hover:text-white hover:bg-[#202430]'
                 }`}
               >
@@ -135,7 +170,7 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
               <BarChart3 className="w-4 h-4 text-[#F58220]" />
               <span>Admin Analytics App</span>
             </div>
-            <span className="text-[10px] bg-[#F58220] text-white font-bold px-1.5 py-0.5 rounded uppercase">
+            <span className="text-[10px] bg-[#C2410C] text-white font-bold px-1.5 py-0.5 rounded uppercase">
               Vite
             </span>
           </a>
@@ -155,7 +190,7 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
               onClick={() => demoLogin('STUDENT')}
               className={`py-1 px-1.5 rounded font-medium text-center transition ${
                 user?.role === 'STUDENT'
-                  ? 'bg-[#F58220] text-white font-bold'
+                  ? 'bg-[#C2410C] text-white font-bold'
                   : 'bg-[#262C3A] text-gray-300 hover:text-white'
               }`}
             >
@@ -228,6 +263,7 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
         </div>
       </div>
     </aside>
+    </>
   );
 }
 
