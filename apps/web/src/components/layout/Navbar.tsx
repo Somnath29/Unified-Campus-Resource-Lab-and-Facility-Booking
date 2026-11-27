@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, Bell, Check, ExternalLink } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
+import { formatKolkataTime } from '@/lib/timezone';
 
 export function Navbar() {
   const router = useRouter();
@@ -14,10 +16,58 @@ export function Navbar() {
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const isFetchingRef = useRef(false);
+
+  const loadNotifications = useCallback(async () => {
+    if (!user || isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    try {
+      const res = await api.notifications.list({ page: 1, limit: 10 });
+      setNotifications(res.notifications || []);
+      setUnreadCount(res.unreadCount || 0);
+    } catch {
+      // Handle transient network/auth errors gracefully
+    } finally {
+      isFetchingRef.current = false;
+    }
+  }, [user]);
 
   useEffect(() => {
+    if (!user) return;
     loadNotifications();
-  }, [user]);
+
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadNotifications();
+      }
+    }, 30_000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadNotifications();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user, loadNotifications]);
+
+  const handleNotificationClick = async (n: any) => {
+    if (!n.read) {
+      try {
+        await api.notifications.markRead(n.id);
+        setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
+        setUnreadCount((c) => Math.max(0, c - 1));
+      } catch {}
+    }
+    setIsDropdownOpen(false);
+    if (n.link) {
+      router.push(n.link);
+    }
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -28,16 +78,6 @@ export function Navbar() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const loadNotifications = async () => {
-    try {
-      const res = await api.notifications.list();
-      setNotifications(res.notifications || []);
-      setUnreadCount(res.unreadCount || 0);
-    } catch {
-      // ignore unauthenticated
-    }
-  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,6 +193,7 @@ export function Navbar() {
                   notifications.map((n) => (
                     <div
                       key={n.id}
+                      onClick={() => handleNotificationClick(n)}
                       className={`p-3.5 hover:bg-gray-50 transition cursor-pointer ${
                         !n.read ? 'bg-orange-50/40' : ''
                       }`}
@@ -165,14 +206,21 @@ export function Navbar() {
                       </div>
                       <div className="text-xs text-gray-600 mt-0.5 line-clamp-2">{n.message}</div>
                       <div className="text-[10px] text-gray-400 mt-1.5">
-                        {new Date(n.createdAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        {formatKolkataTime(n.createdAt)} IST
                       </div>
                     </div>
                   ))
                 )}
+              </div>
+
+              <div className="px-4 pt-2 border-t border-gray-100 text-center">
+                <Link
+                  href="/notifications"
+                  onClick={() => setIsDropdownOpen(false)}
+                  className="text-xs font-bold text-[#1976B9] hover:underline"
+                >
+                  View all notifications
+                </Link>
               </div>
             </div>
           )}

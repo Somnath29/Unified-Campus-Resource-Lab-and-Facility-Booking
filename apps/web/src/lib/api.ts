@@ -196,12 +196,6 @@ export const api = {
         method: 'POST',
       }),
   },
-  me: {
-    quota: (date?: string) => {
-      const qs = date ? `?date=${encodeURIComponent(date)}` : '';
-      return apiRequest<import('@lpu/shared').QuotaResponse>(`/me/quota${qs}`);
-    },
-  },
   approvals: {
     list: (status?: string) => {
       const qs = status ? `?status=${status}` : '';
@@ -223,9 +217,53 @@ export const api = {
       apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),
   },
   notifications: {
-    list: () => apiRequest('/notifications'),
-    markRead: (id: string) => apiRequest(`/notifications/${id}/read`, { method: 'PUT' }),
-    markAllRead: () => apiRequest('/notifications/read-all', { method: 'PUT' }),
+    list: (params?: { page?: number; limit?: number; read?: string; type?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.page) qs.set('page', String(params.page));
+      if (params?.limit) qs.set('limit', String(params.limit));
+      if (params?.read) qs.set('read', params.read);
+      if (params?.type) qs.set('type', params.type);
+      const q = qs.toString();
+      return apiRequest<import('@lpu/shared').NotificationsListResponse>(`/notifications${q ? `?${q}` : ''}`);
+    },
+    unreadCount: () => apiRequest<{ unreadCount: number }>('/notifications/unread-count'),
+    markRead: (id: string) => apiRequest(`/notifications/${id}/read`, { method: 'PATCH' }),
+    markAllRead: () => apiRequest('/notifications/read-all', { method: 'PATCH' }),
+    delete: (id: string) => apiRequest(`/notifications/${id}`, { method: 'DELETE' }),
+  },
+  notificationPreferences: {
+    get: () => apiRequest<import('@lpu/shared').NotificationPreferencesResponse>('/notification-preferences'),
+    update: (body: import('@lpu/shared').UpdateNotificationPreferencesRequest) =>
+      apiRequest<import('@lpu/shared').NotificationPreferencesResponse & { message: string }>('/notification-preferences', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+  },
+  me: {
+    quota: (date?: string) => {
+      const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+      return apiRequest<import('@lpu/shared').QuotaResponse>(`/me/quota${qs}`);
+    },
+    get: () => apiRequest<{ user: import('@lpu/shared').UserProfileDTO }>('/me'),
+    updateProfile: (body: import('@lpu/shared').UpdateProfileRequest) =>
+      apiRequest<{ user: import('@lpu/shared').UserProfileDTO; message: string }>('/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    changePassword: (body: { currentPassword: string; newPassword: string }) =>
+      apiRequest<{ success: boolean; token?: string; passwordChangedAt: string; message: string }>(
+        '/auth/change-password',
+        { method: 'POST', body: JSON.stringify(body) }
+      ),
+    getSessions: () => apiRequest<import('@lpu/shared').ActiveSessionsResponse>('/me/sessions'),
+    revokeSession: (id: string) => apiRequest(`/me/sessions/${id}`, { method: 'DELETE' }),
+    revokeAllSessions: () => apiRequest('/me/sessions/revoke-all', { method: 'POST' }),
+    getCalendarFeed: () => apiRequest<import('@lpu/shared').CalendarFeedStatusResponse>('/me/calendar-feed'),
+    regenerateCalendarFeed: () =>
+      apiRequest<import('@lpu/shared').RegenerateCalendarFeedResponse>('/me/calendar-feed/regenerate', {
+        method: 'POST',
+      }),
+    revokeCalendarFeed: () => apiRequest('/me/calendar-feed', { method: 'DELETE' }),
   },
   admin: {
     getUsers: () => apiRequest('/admin/users'),

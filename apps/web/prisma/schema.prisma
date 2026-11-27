@@ -73,6 +73,13 @@ enum CheckInMethod {
   ADMIN_OVERRIDE
 }
 
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
 model User {
   id                String         @id @default(uuid())
   email             String         @unique
@@ -84,14 +91,19 @@ model User {
   designation       String?
   phone             String?
   avatarUrl         String?
-  isActive          Boolean        @default(true)
-  passwordChangedAt DateTime?
-  bookings          Booking[]
-  bookingSeries     BookingSeries[]
-  waitlistEntries   WaitlistEntry[]
-  notifications     Notification[]
-  auditLogs         AuditLog[]
-  idempotencyKeys   IdempotencyKey[]
+  isActive                Boolean                  @default(true)
+  passwordChangedAt       DateTime?
+  tokenVersion            Int                      @default(1)
+  bookings                Booking[]
+  bookingSeries           BookingSeries[]
+  waitlistEntries         WaitlistEntry[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+  notificationDeliveries  NotificationDelivery[]
+  sessions                UserSession[]
+  calendarFeeds           CalendarFeed[]
+  auditLogs               AuditLog[]
+  idempotencyKeys         IdempotencyKey[]
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 }
@@ -220,12 +232,14 @@ model Notification {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String
   message   String
-  type      String   @default("SYSTEM") // BOOKING, APPROVAL, REMINDER, CHECKIN, SYSTEM
-  read      Boolean  @default(false)
+  type      String    @default("SYSTEM") // BOOKING, APPROVAL, REMINDER, CHECKIN, SYSTEM, WAITLIST, SECURITY
+  read      Boolean   @default(false)
+  readAt    DateTime?
   link      String?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId, read])
+  @@index([userId, createdAt])
 }
 
 model DepartmentPolicy {
@@ -313,5 +327,70 @@ model RateLimitBucket {
   expiresAt   DateTime
 
   @@index([expiresAt])
+}
+
+model NotificationPreference {
+  id                  String   @id @default(uuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationType    String
+  emailEnabled        Boolean  @default(true)
+  reminderLeadMinutes Int      @default(30)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, notificationType])
+  @@index([userId])
+}
+
+model NotificationDelivery {
+  id               String         @id @default(uuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookingId        String?
+  notificationType String
+  scheduledFor     DateTime
+  status           DeliveryStatus @default(PENDING)
+  attemptCount     Int            @default(0)
+  sentAt           DateTime?
+  lastError        String?
+  recipientEmail   String?
+  subject          String?
+  htmlBody         String?
+  textBody         String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([bookingId, notificationType, scheduledFor])
+  @@index([status, scheduledFor])
+  @@index([userId])
+}
+
+model UserSession {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent    String?
+  deviceLabel  String    @default("Unknown device")
+  ipAddress    String?
+  lastActiveAt DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model CalendarFeed {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, revokedAt])
 }
 

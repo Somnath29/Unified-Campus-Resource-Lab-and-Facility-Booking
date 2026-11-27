@@ -754,8 +754,8 @@ export default function MyBookingsPage() {
 
                     {/* Action Controls Bar */}
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
-                      {/* Check-in Token / QR Info */}
-                      <div>
+                      {/* Check-in Token / QR & Add to Calendar */}
+                      <div className="flex flex-wrap items-center gap-2">
                         {elig?.canShowQr && (
                           <button
                             onClick={() => setQrTarget(booking)}
@@ -765,6 +765,14 @@ export default function MyBookingsPage() {
                             <span>Show Check-In QR</span>
                           </button>
                         )}
+                        <a
+                          href={`/api/bookings/${booking.id}/calendar.ics`}
+                          download={`${booking.bookingNumber}.ics`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[#1976B9] rounded-xl text-xs font-bold transition"
+                        >
+                          <Calendar className="w-3.5 h-3.5" />
+                          <span>Add to Calendar (.ics)</span>
+                        </a>
                       </div>
 
                       {/* Action Buttons */}

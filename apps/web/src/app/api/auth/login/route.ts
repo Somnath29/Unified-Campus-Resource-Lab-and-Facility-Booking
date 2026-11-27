@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { signToken } from '@/lib/auth';
+import { createSessionAndToken } from '@/lib/auth';
 import { ok, fail, withErrorHandling } from '@/lib/api-response';
 
 export const runtime = 'nodejs';
@@ -30,10 +30,14 @@ export const POST = withErrorHandling(async (request: Request) => {
     return fail(401, 'Invalid university email or password.');
   }
 
-  const token = signToken({
-    id: user.id,
-    email: user.email,
-    role: user.role,
+  const { token } = await createSessionAndToken({
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion,
+    },
+    request,
   });
 
   // Set httpOnly cookie

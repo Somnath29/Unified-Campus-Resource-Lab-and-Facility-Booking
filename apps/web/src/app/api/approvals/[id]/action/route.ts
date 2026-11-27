@@ -32,7 +32,7 @@ export const POST = withErrorHandling(
         data: {
           status: BookingStatus.CONFIRMED,
           approvalNotes: notes || `Approved by ${approver.name} (${approver.designation || approver.role})`,
-          checkInToken,
+          checkInToken: null,
           checkInPinHash: hashPin(checkInToken),
           releaseDeadline,
         },
@@ -43,11 +43,30 @@ export const POST = withErrorHandling(
         data: {
           userId: booking.userId,
           title: `Request Approved: ${booking.resource.name}`,
-          message: `Your booking #${booking.bookingNumber} has been approved. Check-in code is ${checkInToken}.`,
+          message: `Your booking #${booking.bookingNumber} has been approved.`,
           type: 'APPROVAL',
           link: '/my-bookings',
         },
       });
+
+      try {
+        const { dispatchEventEmail } = await import('@/services/reminderService');
+        await dispatchEventEmail({
+          userId: booking.user.id,
+          userEmail: booking.user.email,
+          userName: booking.user.name,
+          bookingId: booking.id,
+          notificationType: 'BOOKING_APPROVED',
+          templateKind: 'booking_approved',
+          scheduledFor: new Date(),
+          resourceName: booking.resource.name,
+          building: booking.resource.building,
+          bookingNumber: booking.bookingNumber,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          actionPath: '/my-bookings',
+        });
+      } catch {}
 
       // Audit Log
       await prisma.auditLog.create({
@@ -83,6 +102,26 @@ export const POST = withErrorHandling(
           link: '/my-bookings',
         },
       });
+
+      try {
+        const { dispatchEventEmail } = await import('@/services/reminderService');
+        await dispatchEventEmail({
+          userId: booking.user.id,
+          userEmail: booking.user.email,
+          userName: booking.user.name,
+          bookingId: booking.id,
+          notificationType: 'BOOKING_REJECTED',
+          templateKind: 'booking_rejected',
+          scheduledFor: new Date(),
+          resourceName: booking.resource.name,
+          building: booking.resource.building,
+          bookingNumber: booking.bookingNumber,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          reason: reason || 'Request does not meet department allocation criteria.',
+          actionPath: '/resources',
+        });
+      } catch {}
 
       // Audit Log
       await prisma.auditLog.create({
@@ -130,7 +169,7 @@ export const POST = withErrorHandling(
           endTime: updatedEnd,
           status: BookingStatus.CONFIRMED,
           approvalNotes: notes || `Modified and approved by ${approver.name}. Assigned to ${newResource?.name}.`,
-          checkInToken,
+          checkInToken: null,
           checkInPinHash: hashPin(checkInToken),
           releaseDeadline,
         },
@@ -141,7 +180,7 @@ export const POST = withErrorHandling(
         data: {
           userId: booking.userId,
           title: `Booking Modified & Approved: ${newResource?.name}`,
-          message: `Your request #${booking.bookingNumber} was modified and approved for ${newResource?.name} at ${updatedStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Check-in code is ${checkInToken}.`,
+          message: `Your request #${booking.bookingNumber} was modified and approved for ${newResource?.name} at ${updatedStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
           type: 'APPROVAL',
           link: '/my-bookings',
         },

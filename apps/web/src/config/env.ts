@@ -20,6 +20,12 @@ const envSchema = z.object({
     .default(false),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CANCELLATION_CUTOFF_MINUTES: z.coerce.number().int().nonnegative().default(60),
+  APP_URL: z.string().url().default('http://localhost:3000'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  EMAIL_FROM: z.string().default('LPU Campus Booking <no-reply@lpu.in>'),
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_INITIAL_PASSWORD: z.string().min(8).optional(),
 });

@@ -196,7 +196,7 @@ function downloadIcsCalendar(booking: any, resource: any) {
     `DTSTART:${startUtc}`,
     `DTEND:${endUtc}`,
     `SUMMARY:Reservation: ${resource?.name || 'Campus Resource'} (${booking.bookingNumber})`,
-    `DESCRIPTION:Purpose: ${booking.purpose || 'Campus Resource Booking'}\\nCheck-in PIN: ${booking.checkInToken || 'N/A'}\\nStatus: ${booking.status}\\nReference: ${booking.bookingNumber}`,
+    `DESCRIPTION:Purpose: ${booking.purpose || 'Campus Resource Booking'}\\nStatus: ${booking.status}\\nReference: ${booking.bookingNumber}`,
     `LOCATION:${resource?.name || 'LPU Room'}${resource?.building ? ', ' + resource.building : ''}`,
     `STATUS:${booking.status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE'}`,
     'END:VEVENT',

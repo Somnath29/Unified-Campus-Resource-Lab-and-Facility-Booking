@@ -174,6 +174,9 @@ export * from './booking';
 // Check-In Hardening Types (R8)
 export * from './checkin';
 
+// Notifications, Reminders, Sessions & Calendar Types (R9)
+export * from './r9';
+
 
 
 

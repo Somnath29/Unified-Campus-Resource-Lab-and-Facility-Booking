@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { signToken } from '@/lib/auth';
+import { createSessionAndToken } from '@/lib/auth';
 import { created, fail, withErrorHandling } from '@/lib/api-response';
 import { Role } from '@prisma/client';
 
@@ -49,10 +49,14 @@ export const POST = withErrorHandling(async (request: Request) => {
     },
   });
 
-  const token = signToken({
-    id: user.id,
-    email: user.email,
-    role: user.role,
+  const { token } = await createSessionAndToken({
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion,
+    },
+    request,
   });
 
   // Set httpOnly cookie

@@ -301,7 +301,8 @@ async function runR4Tests() {
     // Verify booking attributes: valid PIN and sequential booking number format
     const createdBooking = matchingBookings[0];
     assert.match(createdBooking.bookingNumber, /^LPU-\d{4}-\d{6}$/);
-    assert.match(createdBooking.checkInToken!, /^\d{6}$/);
+    assert.ok(createdBooking?.checkInPinHash, 'Check-in PIN hash must be stored in DB');
+    assert.strictEqual(createdBooking?.checkInToken, null, 'Plaintext checkInToken must not be stored in DB');
     pass(`Booking created with sequential format ${createdBooking.bookingNumber} and 6-digit PIN`);
   } catch (err) {
     fail('Suite 2: Double-Booking & Idempotency failed', err);
@@ -513,21 +514,22 @@ async function runR4Tests() {
     });
     assert.ok(sampleBooking, 'Sample booking exists for format verification');
 
-    // 1. PIN verification
-    assert.match(sampleBooking.checkInToken!, /^\d{6}$/);
-    pass('Check-in PIN is strictly a 6-digit numeric string');
+    // 1. PIN hash verification (no plaintext PIN stored in DB)
+    assert.strictEqual(sampleBooking.checkInToken, null, 'Plaintext checkInToken must not be stored in DB');
+    assert.ok(sampleBooking.checkInPinHash, 'Hashed check-in PIN must be stored in DB');
+    pass('Check-in PIN is hashed at rest without plaintext DB storage');
 
     // 2. QR Code payload serialization
     const qrPayload = JSON.stringify({
       bookingNumber: sampleBooking.bookingNumber,
-      token: sampleBooking.checkInToken,
+      bookingId: sampleBooking.id,
       resource: sampleBooking.resource.name,
     });
     const parsedQr = JSON.parse(qrPayload);
     assert.strictEqual(parsedQr.bookingNumber, sampleBooking.bookingNumber);
-    assert.strictEqual(parsedQr.token, sampleBooking.checkInToken);
+    assert.strictEqual(parsedQr.bookingId, sampleBooking.id);
     assert.strictEqual(parsedQr.resource, sampleBooking.resource.name);
-    pass('QR code payload serializes and parses correctly with required venue check-in tokens');
+    pass('QR code payload serializes and parses correctly with required booking identifiers');
 
     // 3. RFC 5545 .ics Calendar format generation
     const startUtc = new Date(sampleBooking.startTime).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';

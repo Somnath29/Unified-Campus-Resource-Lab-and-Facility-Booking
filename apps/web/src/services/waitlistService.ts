@@ -535,7 +535,7 @@ export class WaitlistService {
     const lockKey = getWaitlistLockString(resourceId, startTime, endTime);
 
     try {
-      return await prisma.$transaction(
+      const offeredEntry = await prisma.$transaction(
         async (tx) => {
           // 1. Acquire transaction-scoped advisory lock for the slot
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
@@ -651,6 +651,28 @@ export class WaitlistService {
           timeout: 30000,
         }
       );
+
+      if (offeredEntry) {
+        try {
+          const { dispatchEventEmail } = await import('@/services/reminderService');
+          await dispatchEventEmail({
+            userId: offeredEntry.user.id,
+            userEmail: offeredEntry.user.email,
+            userName: offeredEntry.user.name,
+            bookingId: offeredEntry.id,
+            notificationType: 'WAITLIST_OFFER',
+            templateKind: 'waitlist_offer',
+            scheduledFor: offeredEntry.offeredAt || new Date(),
+            resourceName: offeredEntry.resource.name,
+            building: offeredEntry.resource.building,
+            startTime: offeredEntry.startTime,
+            endTime: offeredEntry.endTime,
+            actionPath: '/my-bookings?tab=WAITLIST',
+          });
+        } catch {}
+      }
+
+      return offeredEntry;
     } catch (err: any) {
       console.error('[WaitlistService.triggerSlotOffer Error]', err);
       return null;

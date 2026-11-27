@@ -409,7 +409,7 @@ export class BookingService {
             expectedAttendance,
             priority: input.priority || PriorityLevel.NORMAL,
             status: initialStatus,
-            checkInToken,
+            checkInToken: null,
             checkInPinHash: hashPin(checkInToken),
             releaseDeadline,
             departmentId: resource.department,
@@ -446,8 +446,12 @@ export class BookingService {
           },
         });
 
+        const { checkInPinHash: _omitPinHash, ...safeBooking } = newBooking;
         const responsePayload = {
-          booking: newBooking,
+          booking: {
+            ...safeBooking,
+            checkInToken, // Returned once on creation; never stored in plaintext in DB
+          },
           message:
             initialStatus === BookingStatus.CONFIRMED
               ? 'Booking successfully confirmed!'
@@ -489,7 +493,7 @@ export class BookingService {
                 : `Booking Request Submitted: ${resource.name}`,
             message:
               initialStatus === BookingStatus.CONFIRMED
-                ? `Your booking #${result.booking.bookingNumber} is confirmed for ${start.toLocaleDateString()}. Check-in code: ${result.booking.checkInToken}`
+                ? `Your booking #${result.booking.bookingNumber} is confirmed for ${start.toLocaleDateString()}.`
                 : `Your request #${result.booking.bookingNumber} has been forwarded to the department approver for review.`,
             type: 'BOOKING',
             link: '/my-bookings',
@@ -694,7 +698,6 @@ export class BookingService {
 
     // Show QR: CONFIRMED or CHECKED_IN, owner or admin
     const canShowQr =
-      Boolean(booking.checkInToken) &&
       (booking.status === BookingStatus.CONFIRMED || booking.status === BookingStatus.CHECKED_IN) &&
       (isOwner || isAdmin);
 
@@ -805,7 +808,7 @@ export class BookingService {
       return b;
     });
 
-    // Notify user
+    // Notify user & dispatch event email
     try {
       await prisma.notification.create({
         data: {
@@ -816,6 +819,29 @@ export class BookingService {
           link: '/my-bookings?tab=CANCELLED',
         },
       });
+      const owner = await prisma.user.findUnique({
+        where: { id: booking.userId },
+        select: { id: true, email: true, name: true },
+      });
+      if (owner) {
+        const { dispatchEventEmail } = await import('@/services/reminderService');
+        await dispatchEventEmail({
+          userId: owner.id,
+          userEmail: owner.email,
+          userName: owner.name,
+          bookingId: booking.id,
+          notificationType: 'BOOKING_CANCELLED',
+          templateKind: 'booking_cancelled',
+          scheduledFor: new Date(),
+          resourceName: booking.resource.name,
+          building: booking.resource.building,
+          bookingNumber: booking.bookingNumber,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          reason: cleanReason,
+          actionPath: '/my-bookings?tab=CANCELLED',
+        });
+      }
     } catch {
       // Non-fatal
     }
