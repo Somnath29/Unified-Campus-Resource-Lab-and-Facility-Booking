@@ -94,6 +94,8 @@ export default function ApprovalsPage() {
   const [drawerNeighbours, setDrawerNeighbours] = useState<any[]>([]);
   const [drawerAlternatives, setDrawerAlternatives] = useState<any>(null);
   const [drawerPreemption, setDrawerPreemption] = useState<any>(null);
+  const [drawerHistory, setDrawerHistory] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoadingAlternatives, setIsLoadingAlternatives] = useState(false);
   const [isLoadingPreemption, setIsLoadingPreemption] = useState(false);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
@@ -285,6 +287,14 @@ export default function ApprovalsPage() {
         .then((candData) => setDrawerPreemption(candData))
         .catch((e) => console.error('Failed to load pre-emption candidates:', e))
         .finally(() => setIsLoadingPreemption(false));
+
+      // 5. Fetch Unified History & Audit Trail (P8)
+      setIsLoadingHistory(true);
+      api.bookings
+        .getHistory(id)
+        .then((histData) => setDrawerHistory(histData.timeline || []))
+        .catch((e) => console.error('Failed to load booking history:', e))
+        .finally(() => setIsLoadingHistory(false));
     } catch (err: any) {
       showToast('error', err.message || 'Failed to load booking details.', 'Error');
     } finally {
@@ -304,6 +314,7 @@ export default function ApprovalsPage() {
     setDrawerNeighbours([]);
     setDrawerAlternatives(null);
     setDrawerPreemption(null);
+    setDrawerHistory([]);
   };
 
   // --------------------------------------------------------------------------
@@ -2535,8 +2546,47 @@ export default function ApprovalsPage() {
                           Audit Trail & Notes Thread
                         </div>
 
-                        {/* Decision History */}
-                        {drawerDetails.approvalDecisions?.map((dec: any) => (
+                        {/* Decision & Audit History Timeline */}
+                        {drawerHistory.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-bold text-gray-500 uppercase">Unified Decision & Audit Timeline</div>
+                            {drawerHistory.map((item: any) => (
+                              <div
+                                key={item.id}
+                                className={`p-3 rounded-xl border text-xs space-y-1 ${
+                                  item.type === 'DECISION'
+                                    ? 'bg-blue-50/60 border-blue-100'
+                                    : 'bg-gray-50 border-gray-200'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between font-bold text-gray-900">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-black ${
+                                      item.type === 'DECISION' ? 'bg-blue-200 text-blue-900' : 'bg-gray-200 text-gray-800'
+                                    }`}>
+                                      {item.type}
+                                    </span>
+                                    <span>{item.action}</span>
+                                  </span>
+                                  <span className="text-[10px] text-gray-400 font-normal">
+                                    {new Date(item.timestamp).toLocaleString()}
+                                  </span>
+                                </div>
+                                {item.actor && (
+                                  <div className="text-gray-600 text-[11px]">
+                                    By: <strong className="text-gray-800">{item.actor.name}</strong> ({item.actor.role})
+                                  </div>
+                                )}
+                                {item.reason && (
+                                  <div className="text-gray-700 italic text-[11px]">"{item.reason}"</div>
+                                )}
+                                {item.details && (
+                                  <div className="text-gray-600 text-[11px]">{item.details}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : drawerDetails.approvalDecisions?.map((dec: any) => (
                           <div
                             key={dec.id}
                             className="p-3.5 bg-blue-50/50 rounded-2xl border border-blue-100 text-xs space-y-1.5"

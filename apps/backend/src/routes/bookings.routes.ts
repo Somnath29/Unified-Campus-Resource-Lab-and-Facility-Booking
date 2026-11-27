@@ -5,6 +5,13 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { BookingStatus, ActivityType, PriorityLevel, Role } from '@prisma/client';
 import crypto from 'crypto';
 
+import {
+  getBookingComments,
+  addBookingComment,
+  getBookingHistory,
+} from '../services/commentHistory.service';
+import { ApprovalError } from '../services/approvalService';
+
 const router = Router();
 
 const createBookingSchema = z.object({
@@ -359,6 +366,60 @@ router.post('/:id/cancel', authenticateToken, async (req: AuthenticatedRequest, 
   } catch (err) {
     console.error('Error cancelling booking:', err);
     return res.status(500).json({ error: 'Failed to cancel booking.' });
+  }
+});
+
+// ============================================================================
+// P8: Comments & Decision History Endpoints
+// ============================================================================
+
+// GET /api/bookings/:id/comments - Retrieve comments thread
+router.get('/:id/comments', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = req.user!;
+    const comments = await getBookingComments(id, user);
+    return res.json({ comments });
+  } catch (err: any) {
+    if (err instanceof ApprovalError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error('Error fetching comments:', err);
+    return res.status(500).json({ error: 'Failed to retrieve comments.' });
+  }
+});
+
+// POST /api/bookings/:id/comments - Add comment (supports requester reply to REQUEST_INFO)
+router.post('/:id/comments', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { body, isInternal = false } = req.body;
+    const user = req.user!;
+
+    const result = await addBookingComment(id, user, body, Boolean(isInternal));
+    return res.status(201).json(result);
+  } catch (err: any) {
+    if (err instanceof ApprovalError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error('Error adding comment:', err);
+    return res.status(500).json({ error: 'Failed to add comment.' });
+  }
+});
+
+// GET /api/bookings/:id/history - Unified decision & audit timeline
+router.get('/:id/history', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = req.user!;
+    const history = await getBookingHistory(id, user);
+    return res.json(history);
+  } catch (err: any) {
+    if (err instanceof ApprovalError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error('Error fetching history:', err);
+    return res.status(500).json({ error: 'Failed to retrieve booking history.' });
   }
 });
 

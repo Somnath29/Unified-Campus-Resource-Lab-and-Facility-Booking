@@ -80,6 +80,10 @@ export const api = {
     },
     getById: (id: string) => apiRequest(`/bookings/${id}`),
     cancel: (id: string, reason?: string) => apiRequest(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    getComments: (id: string) => apiRequest<any>(`/bookings/${id}/comments`),
+    addComment: (id: string, body: { body: string; isInternal?: boolean }) =>
+      apiRequest<any>(`/bookings/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
+    getHistory: (id: string) => apiRequest<any>(`/bookings/${id}/history`),
   },
   approvals: {
     list: (params?: Record<string, any> | string) => {
