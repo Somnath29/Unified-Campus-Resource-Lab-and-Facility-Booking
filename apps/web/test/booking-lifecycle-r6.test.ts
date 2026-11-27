@@ -1,7 +1,8 @@
 import assert from 'assert';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { prisma } from '../src/lib/prisma';
-import { BookingStatus, ActivityType, PriorityLevel, Role } from '@prisma/client';
+import { BookingStatus, ActivityType, PriorityLevel, Role, ResourceCategory } from '@prisma/client';
 import env from '../src/config/env';
 import {
   getCurrentKolkataDateString,
@@ -65,6 +66,9 @@ function getNextWeekdayDate(dayName: string, minDaysAhead = 1): string {
   return baseDate;
 }
 
+let createdR6UserIds: string[] = [];
+let createdR6ResourceIds: string[] = [];
+
 async function cleanup() {
   await prisma.idempotencyKey.deleteMany({
     where: { key: { startsWith: 'r6-test-' } },
@@ -79,9 +83,18 @@ async function cleanup() {
         { purpose: { contains: 'State machine' } },
         { purpose: { contains: 'Concurrent test' } },
         { purpose: { contains: 'Ownership security' } },
+        ...(createdR6ResourceIds.length > 0 ? [{ resourceId: { in: createdR6ResourceIds } }] : []),
+        ...(createdR6UserIds.length > 0 ? [{ userId: { in: createdR6UserIds } }] : []),
       ],
     },
   });
+
+  if (createdR6ResourceIds.length > 0) {
+    await prisma.resource.deleteMany({ where: { id: { in: createdR6ResourceIds } } }).catch(() => {});
+  }
+  if (createdR6UserIds.length > 0) {
+    await prisma.user.deleteMany({ where: { id: { in: createdR6UserIds } } }).catch(() => {});
+  }
 }
 
 async function setup() {
@@ -89,13 +102,38 @@ async function setup() {
   console.log('🚀 INITIALIZING R6 TEST SUITE: BOOKING LIFECYCLE & MY BOOKINGS');
   console.log('======================================================\n');
 
-  studentA = await prisma.user.findUnique({ where: { email: 'ketan.12204598@lpu.in' } });
-  studentB = await prisma.user.findUnique({ where: { email: 'other.student@lpu.in' } });
+  const ts = Date.now();
+  const pwdHash = await bcrypt.hash('Lpu@12345', 10);
+
+  studentA = await prisma.user.create({
+    data: {
+      email: `r6.studentA.${ts}@lpu.in`,
+      name: 'R6 Isolated Student A',
+      passwordHash: pwdHash,
+      role: Role.STUDENT,
+      department: 'Computer Science',
+      regNo: `R6A${String(ts).slice(-6)}`,
+      emailVerified: true,
+    },
+  });
+  studentB = await prisma.user.create({
+    data: {
+      email: `r6.studentB.${ts}@lpu.in`,
+      name: 'R6 Isolated Student B',
+      passwordHash: pwdHash,
+      role: Role.STUDENT,
+      department: 'Computer Science',
+      regNo: `R6B${String(ts).slice(-6)}`,
+      emailVerified: true,
+    },
+  });
+  createdR6UserIds = [studentA.id, studentB.id];
+
   faculty = await prisma.user.findUnique({ where: { email: 'arvind.cse@lpu.in' } });
   approver = await prisma.user.findUnique({ where: { email: 'approver.sece@lpu.in' } });
   admin = await prisma.user.findUnique({ where: { email: 'admin.estate@lpu.in' } });
 
-  if (!studentA || !studentB || !approver || !admin) {
+  if (!studentA || !studentB || !faculty || !approver || !admin) {
     throw new Error('Required seed users are missing. Run npm run db:seed first.');
   }
 
@@ -105,20 +143,42 @@ async function setup() {
   approverToken = signToken({ id: approver.id, email: approver.email, role: approver.role });
   adminToken = signToken({ id: admin.id, email: admin.email, role: admin.role });
 
-  autoResource = await prisma.resource.findFirst({
-    where: { name: 'CSE Classroom 204', requiresApproval: false, deletedAt: null },
+  autoResource = await prisma.resource.create({
+    data: {
+      code: `R6-ROOM-${String(ts).slice(-6)}`,
+      name: `R6 Isolated Classroom ${String(ts).slice(-4)}`,
+      category: ResourceCategory.CLASSROOM,
+      department: approver.department,
+      building: 'Block 34',
+      floor: '2nd Floor',
+      capacity: 60,
+      amenities: ['Projector', 'Wi-Fi'],
+      imageUrl: 'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=600&q=80',
+      requiresApproval: false,
+      operatingHours: '08:00 AM - 08:00 PM',
+    },
   });
-
-  approvalResource = await prisma.resource.findFirst({
-    where: { requiresApproval: true, deletedAt: null },
+  approvalResource = await prisma.resource.create({
+    data: {
+      code: `R6-APPR-${String(ts).slice(-6)}`,
+      name: `R6 Isolated Approval Hall ${String(ts).slice(-4)}`,
+      category: ResourceCategory.SEMINAR_HALL,
+      department: approver.department,
+      building: 'Block 34',
+      floor: '3rd Floor',
+      capacity: 80,
+      amenities: ['Projector', 'Audio System'],
+      imageUrl: 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=600&q=80',
+      requiresApproval: true,
+      operatingHours: '08:00 AM - 08:00 PM',
+    },
   });
+  createdR6ResourceIds = [autoResource.id, approvalResource.id];
 
   assert.ok(autoResource, 'Auto-confirmable resource exists');
   assert.ok(approvalResource, 'Approval-required resource exists');
 
-  await cleanup();
-
-  console.log(`  ✓ Seed data loaded: Student (${studentA.email}), Resource (${autoResource.name})`);
+  console.log(`  ✓ Isolated fixtures created: Student (${studentA.email}), Resource (${autoResource.name})`);
 }
 
 async function runRescheduleTests() {
@@ -236,7 +296,7 @@ async function runRescheduleTests() {
     });
     const data4 = await res4.json();
     assert.strictEqual(res4.status, 409, 'Conflict must return 409');
-    assert.ok(data4.details?.alternativeSlots?.length > 0, 'Must include alternative slots');
+    assert.ok(data4.details?.alternativeSlots?.length > 0, `Must include alternative slots, got: ${JSON.stringify(data4)}`);
     await prisma.booking.delete({ where: { id: conflictBooking.id } });
     pass('1.4 Conflicting reschedule returns 409 with alternative slots and preserves original booking');
 

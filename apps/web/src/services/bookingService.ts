@@ -1675,7 +1675,10 @@ export class BookingService {
               },
             },
           },
-          orderBy: { startTime: tab === 'PAST' || tab === 'CANCELLED' ? 'desc' : 'asc' },
+          orderBy: [
+            { startTime: tab === 'PAST' || tab === 'CANCELLED' ? 'desc' : 'asc' },
+            { id: 'asc' },
+          ],
           skip,
           take: limit,
         }),

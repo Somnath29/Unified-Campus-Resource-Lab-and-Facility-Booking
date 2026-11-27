@@ -23,11 +23,15 @@ export function fail(status: number, message: string, details?: any): NextRespon
       'availableFrom',
       'releaseDeadline',
       'canOverride',
+      'alternativeSlots',
     ];
     for (const key of safePublicKeys) {
       if (details[key] !== undefined) {
         body[key] = details[key];
       }
+    }
+    if (details.alternativeSlots !== undefined && process.env.NODE_ENV === 'production') {
+      body.details = { alternativeSlots: details.alternativeSlots };
     }
   }
   if (details !== undefined && process.env.NODE_ENV !== 'production') {

@@ -41,30 +41,31 @@ let studentA: any;
 let studentAToken: string;
 let studentB: any;
 let studentBToken: string;
+let facultyUser: any;
 let approver: any;
 let approverToken: string;
 let resourceA: any;
 let approvalResource: any;
-let originalStudentAName: string;
-let originalStudentAPhone: string | null;
+let createdR9UserIds: string[] = [];
 
 async function cleanup() {
   setTestEmailObserver(null);
   await prisma.notificationPreference.deleteMany({
-    where: { userId: { in: [studentA?.id, studentB?.id].filter(Boolean) } },
+    where: { userId: { in: createdR9UserIds } },
   }).catch(() => {});
   await prisma.notificationDelivery.deleteMany({
-    where: { userId: { in: [studentA?.id, studentB?.id].filter(Boolean) } },
+    where: { userId: { in: createdR9UserIds } },
   }).catch(() => {});
   await prisma.calendarFeed.deleteMany({
-    where: { userId: { in: [studentA?.id, studentB?.id].filter(Boolean) } },
+    where: { userId: { in: createdR9UserIds } },
   }).catch(() => {});
   await prisma.userSession.deleteMany({
-    where: { userId: { in: [studentA?.id, studentB?.id].filter(Boolean) } },
+    where: { userId: { in: createdR9UserIds } },
   }).catch(() => {});
   await prisma.notification.deleteMany({
     where: {
       OR: [
+        { userId: { in: createdR9UserIds } },
         { title: { contains: 'R9 Test' } },
         { message: { contains: 'R9 Test' } },
       ],
@@ -75,14 +76,14 @@ async function cleanup() {
       OR: [
         { bookingNumber: { startsWith: 'LPU-TEST-R9-' } },
         { purpose: { contains: 'R9 Test' } },
+        ...(createdR9UserIds.length > 0 ? [{ userId: { in: createdR9UserIds } }] : []),
       ],
     },
   }).catch(() => {});
 
-  if (studentA && originalStudentAName) {
-    await prisma.user.update({
-      where: { id: studentA.id },
-      data: { name: originalStudentAName, phone: originalStudentAPhone },
+  if (createdR9UserIds.length > 0) {
+    await prisma.user.deleteMany({
+      where: { id: { in: createdR9UserIds } },
     }).catch(() => {});
   }
 }
@@ -92,13 +93,46 @@ async function setup() {
   console.log('🔔 INITIALIZING R9 TEST SUITE: NOTIFICATIONS, REMINDERS & ACCOUNT');
   console.log('======================================================\n');
 
-  studentA = await prisma.user.findUnique({ where: { email: 'aastha.12108742@lpu.in' } });
-  studentB = await prisma.user.findUnique({ where: { email: 'other.student@lpu.in' } });
-  approver = await prisma.user.findUnique({ where: { email: 'approver.sece@lpu.in' } });
+  const ts = Date.now();
+  const pwdHash = await bcrypt.hash('Lpu@12345', 10);
 
-  assert.ok(studentA && studentB && approver, 'Seed users exist');
-  originalStudentAName = studentA.name;
-  originalStudentAPhone = studentA.phone;
+  studentA = await prisma.user.create({
+    data: {
+      email: `r9.studentA.${ts}@lpu.in`,
+      name: 'R9 Isolated Student A',
+      passwordHash: pwdHash,
+      role: Role.STUDENT,
+      department: 'Computer Science',
+      regNo: `R9A${String(ts).slice(-6)}`,
+      emailVerified: true,
+    },
+  });
+  studentB = await prisma.user.create({
+    data: {
+      email: `r9.studentB.${ts}@lpu.in`,
+      name: 'R9 Isolated Student B',
+      passwordHash: pwdHash,
+      role: Role.STUDENT,
+      department: 'Computer Science',
+      regNo: `R9B${String(ts).slice(-6)}`,
+      emailVerified: true,
+    },
+  });
+  facultyUser = await prisma.user.create({
+    data: {
+      email: `r9.faculty.${ts}@lpu.in`,
+      name: 'R9 Isolated Faculty',
+      passwordHash: pwdHash,
+      role: Role.FACULTY,
+      department: 'Computer Science',
+      regNo: `R9F${String(ts).slice(-6)}`,
+      emailVerified: true,
+    },
+  });
+  createdR9UserIds = [studentA.id, studentB.id, facultyUser.id];
+
+  approver = await prisma.user.findUnique({ where: { email: 'approver.sece@lpu.in' } });
+  assert.ok(studentA && studentB && facultyUser && approver, 'Test & seed users exist');
 
   studentAToken = signAuthToken({ id: studentA.id, email: studentA.email, role: studentA.role });
   studentBToken = signAuthToken({ id: studentB.id, email: studentB.email, role: studentB.role });
@@ -111,8 +145,6 @@ async function setup() {
     where: { requiresApproval: true, deletedAt: null },
   });
   assert.ok(resourceA && approvalResource, 'Seed resources exist');
-
-  await cleanup();
 }
 
 let seq = 1;
@@ -415,11 +447,11 @@ async function runReminderAndEmailTests() {
 async function runProfileAndSessionTests() {
   console.log('\n--- SUITE C & D: Profile, Password & Distributed Session Revocation ---');
   try {
-    // Login to get a real persistent UserSession token
-    const demoRes = await fetch(`${BASE_URL}/api/auth/demo-login`, {
+    // Login to get a real persistent UserSession token using isolated suite faculty user
+    const demoRes = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'FACULTY' }),
+      body: JSON.stringify({ email: facultyUser.email, password: 'Lpu@12345' }),
     });
     const demoData = await demoRes.json();
     assert.strictEqual(demoRes.status, 200);
@@ -509,10 +541,10 @@ async function runProfileAndSessionTests() {
 
     // 39-41. Sign out all devices invalidates all sessions & logs AuditLog
     const login2 = await (
-      await fetch(`${BASE_URL}/api/auth/demo-login`, {
+      await fetch(`${BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'FACULTY' }),
+        body: JSON.stringify({ email: facultyUser.email, password: 'Lpu@12345' }),
       })
     ).json();
     const revokeAllRes = await fetch(`${BASE_URL}/api/me/sessions/revoke-all`, {

@@ -13,9 +13,16 @@ async function main() {
 
   // Clean existing records in reverse dependency order
   await prisma.auditLog.deleteMany({});
+  await prisma.notificationDelivery.deleteMany({});
+  await prisma.notificationPreference.deleteMany({});
   await prisma.notification.deleteMany({});
+  await prisma.waitlistEntry.deleteMany({});
   await prisma.timetableEntry.deleteMany({});
   await prisma.booking.deleteMany({});
+  await prisma.bookingSeries.deleteMany({});
+  await prisma.calendarFeed.deleteMany({});
+  await prisma.userSession.deleteMany({});
+  await prisma.idempotencyKey.deleteMany({});
   await prisma.resource.deleteMany({});
   await prisma.departmentPolicy.deleteMany({});
   await prisma.user.deleteMany({});
