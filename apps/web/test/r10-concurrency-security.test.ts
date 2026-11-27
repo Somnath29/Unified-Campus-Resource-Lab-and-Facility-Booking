@@ -182,20 +182,69 @@ async function main() {
     });
     assert.equal(cancelRes.status, 200);
 
-    // Fire 5 parallel accept calls for the same waitlist offer
-    const acceptResults = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        apiReq(`/api/waitlist/${entryId}/accept`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${waiter.token}` },
-        })
-      )
+    // Fire 5 parallel accept calls for the same waitlist offer and capture every outcome
+    const acceptOutcomes = await Promise.all(
+      Array.from({ length: 5 }, async (_, idx) => {
+        try {
+          const res = await apiReq(`/api/waitlist/${entryId}/accept`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${waiter.token}` },
+          });
+          return { idx, status: res.status, body: res.body, exception: null as string | null };
+        } catch (err: any) {
+          return { idx, status: 0, body: null, exception: err?.message || String(err) };
+        }
+      })
     );
 
-    const won = acceptResults.filter((r) => r.status === 200 || r.status === 201);
-    const rejected = acceptResults.filter((r) => r.status === 409 || r.status === 400);
-    assert.equal(won.length, 1, `Expected exactly 1 waitlist accept win, got ${won.length}`);
-    assert.equal(rejected.length, 4, `Expected 4 rejected duplicate accepts, got ${rejected.length}`);
+    const won = acceptOutcomes.filter((r) => !r.exception && (r.status === 200 || r.status === 201));
+    const legitimateRejections = acceptOutcomes.filter(
+      (r) => !r.exception && (r.status === 409 || r.status === 400)
+    );
+    const unexpectedFailures = acceptOutcomes.filter(
+      (r) => r.exception || r.status >= 500 || (r.status !== 200 && r.status !== 201 && r.status !== 409 && r.status !== 400)
+    );
+
+    const slotBookings = await prisma.booking.findMany({
+      where: {
+        resourceId: resource.id,
+        status: { in: ['PENDING', 'APPROVED', 'CONFIRMED', 'CHECKED_IN'] },
+        startTime: { lt: new Date(endTime) },
+        endTime: { gt: new Date(startTime) },
+      },
+      select: { id: true, status: true },
+    });
+    const finalEntry = await prisma.waitlistEntry.findUnique({
+      where: { id: entryId },
+      select: { id: true, status: true, bookingId: true },
+    });
+
+    const diagSummary = JSON.stringify({
+      statuses: acceptOutcomes.map((o) => o.status),
+      exceptions: acceptOutcomes.map((o) => o.exception).filter(Boolean),
+      responses: acceptOutcomes.map((o) => ({
+        idx: o.idx,
+        status: o.status,
+        error: o.body?.error,
+        code: o.body?.code,
+      })),
+      slotBookingCount: slotBookings.length,
+      finalWaitlistStatus: finalEntry?.status,
+      finalWaitlistBookingId: finalEntry?.bookingId,
+    });
+
+    assert.equal(unexpectedFailures.length, 0, `Unexpected errors/timeouts in parallel accept: ${diagSummary}`);
+    assert.equal(won.length, 1, `Expected exactly 1 waitlist accept win, got ${won.length}: ${diagSummary}`);
+    assert.equal(
+      legitimateRejections.length,
+      4,
+      `Expected 4 rejected duplicate accepts, got ${legitimateRejections.length}: ${diagSummary}`
+    );
+    assert.equal(slotBookings.length, 1, `Expected exactly 1 active booking for slot: ${diagSummary}`);
+    assert.equal(finalEntry?.status, 'FULFILLED', `Expected waitlist entry FULFILLED: ${diagSummary}`);
+    console.log(
+      `    [diag] statuses=${JSON.stringify(acceptOutcomes.map((o) => o.status))}, slotBookings=${slotBookings.length}, waitlistStatus=${finalEntry?.status}`
+    );
   });
 
   // 3. Cross-User Authorization & Security Tests

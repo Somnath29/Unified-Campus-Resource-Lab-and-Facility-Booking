@@ -217,6 +217,9 @@ export class BookingService {
    */
   static async createBooking(options: CreateBookingOptions): Promise<CreateBookingResult> {
     const { user, input, idempotencyKey, tx: externalTx, waitlistEntryId } = options;
+    // Reuse caller's transaction client when invoked inside an outer $transaction
+    // (e.g. WaitlistService.acceptOffer) so we never acquire a second pool connection.
+    const db = externalTx ?? prisma;
     const start = new Date(input.startTime);
     const end = new Date(input.endTime);
 
@@ -243,7 +246,7 @@ export class BookingService {
     const requestHash = computeRequestHash(input);
 
     if (idempotencyKey) {
-      const existingKeyRecord = await prisma.idempotencyKey.findUnique({
+      const existingKeyRecord = await db.idempotencyKey.findUnique({
         where: {
           userId_key: {
             userId: user.id,
@@ -270,7 +273,7 @@ export class BookingService {
     }
 
     // 3. Resource Validations
-    const resource = await prisma.resource.findUnique({
+    const resource = await db.resource.findUnique({
       where: { id: input.resourceId },
     });
 
@@ -308,7 +311,7 @@ export class BookingService {
     const startHourMin = getTimeStringInKolkata(start);
     const endHourMin = getTimeStringInKolkata(end);
 
-    const timetableConflicts = await prisma.timetableEntry.findMany({
+    const timetableConflicts = await db.timetableEntry.findMany({
       where: {
         resourceId: input.resourceId,
         dayOfWeek,
@@ -334,7 +337,7 @@ export class BookingService {
       resource,
       startTime: start,
       endTime: end,
-      prisma,
+      prisma: db as any,
     });
 
     if (!policyDecision.allowed) {

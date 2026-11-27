@@ -27,8 +27,8 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/campus_booking_test?schema=public
-      DIRECT_URL: postgresql://postgres:postgrespassword@localhost:5432/campus_booking_test?schema=public
+      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/campus_booking_test?schema=public&connection_limit=20&pool_timeout=20
+      DIRECT_URL: postgresql://postgres:postgrespassword@localhost:5432/campus_booking_test?schema=public&connection_limit=20&pool_timeout=20
       JWT_SECRET: ci-jwt-secret-must-be-at-least-32-characters-long
       CHECKIN_TOKEN_SECRET: ci-checkin-secret-must-be-32-chars-min
       RESOURCE_SECRET_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
