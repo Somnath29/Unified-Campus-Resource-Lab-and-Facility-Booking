@@ -44,6 +44,11 @@ export function Sidebar({ pendingApprovalsCount = 0, unreadNotificationsCount = 
             icon: CheckSquare,
             badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined,
           },
+          {
+            name: 'Insights',
+            href: '/approvals/insights',
+            icon: BarChart3,
+          },
         ]
       : []),
     {

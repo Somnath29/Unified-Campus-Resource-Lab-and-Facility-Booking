@@ -115,6 +115,14 @@ export const api = {
       apiRequest<any>(`/approvals/preemption/${recordId}/admin-confirm`, { method: 'POST', body: JSON.stringify(body) }),
     undoPreemption: (recordId: string, body: { undoReason: string }) =>
       apiRequest<any>(`/approvals/preemption/${recordId}/undo`, { method: 'POST', body: JSON.stringify(body) }),
+    getInsights: (params?: Record<string, string>) => {
+      const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
+      return apiRequest<any>(`/approvals/insights${qs}`);
+    },
+    sendPolicyRequest: (body: any) =>
+      apiRequest<any>('/approvals/insights/policy-request', { method: 'POST', body: JSON.stringify(body) }),
+    addNoShowNote: (body: { targetUserId: string; note: string }) =>
+      apiRequest<any>('/approvals/insights/no-show-note', { method: 'POST', body: JSON.stringify(body) }),
   },
   checkin: {
     verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),

@@ -18,6 +18,11 @@ import {
   confirmFacultyPreemptionByAdmin,
   undoPreemption,
 } from '../services/preemption.service';
+import {
+  getDepartmentInsights,
+  sendPolicyChangeRequest,
+  addNoShowInternalNote,
+} from '../services/insights.service';
 
 import { AuthenticatedUser } from '../middleware/auth';
 
@@ -736,6 +741,94 @@ router.post(
       }
       console.error('Error undoing pre-emption:', err);
       return res.status(500).json({ error: 'Failed to undo pre-emption action.' });
+    }
+  }
+);
+
+// ============================================================================
+// 12. GET /api/approvals/insights - Department Utilisation Insights (P9)
+// ============================================================================
+router.get(
+  '/insights',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      const { startDate, endDate, idleThresholdHours } = req.query;
+
+      const insights = await getDepartmentInsights(user, {
+        startDate: startDate ? String(startDate) : undefined,
+        endDate: endDate ? String(endDate) : undefined,
+        idleThresholdHours: idleThresholdHours ? Number(idleThresholdHours) : undefined,
+      });
+
+      return res.json(insights);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error fetching department insights:', err);
+      return res.status(500).json({ error: 'Failed to retrieve department insights.' });
+    }
+  }
+);
+
+// ============================================================================
+// 13. POST /api/approvals/insights/policy-request - Send Policy Change Request (P9)
+// ============================================================================
+router.post(
+  '/insights/policy-request',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      const { department, resourceId, subject, details, suggestedPolicy } = req.body;
+
+      const result = await sendPolicyChangeRequest(user, {
+        department,
+        resourceId,
+        subject,
+        details,
+        suggestedPolicy,
+      });
+
+      return res.status(201).json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error sending policy change request:', err);
+      return res.status(500).json({ error: 'Failed to submit policy-change request.' });
+    }
+  }
+);
+
+// ============================================================================
+// 14. POST /api/approvals/insights/no-show-note - Add Internal Note on Repeat No-Show User (P9)
+// ============================================================================
+router.post(
+  '/insights/no-show-note',
+  authenticateToken,
+  requireRole(Role.DEPARTMENT_APPROVER, Role.ADMINISTRATOR),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      const { targetUserId, note } = req.body;
+
+      const result = await addNoShowInternalNote(user, {
+        targetUserId,
+        note,
+      });
+
+      return res.status(201).json(result);
+    } catch (err: any) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.statusCode).json({ error: err.message, details: err.details });
+      }
+      console.error('Error recording no-show note:', err);
+      return res.status(500).json({ error: 'Failed to record internal note.' });
     }
   }
 );
