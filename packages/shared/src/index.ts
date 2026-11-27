@@ -78,6 +78,7 @@ export interface BookingDTO {
   user?: UserDTO;
   resourceId: string;
   resource?: ResourceDTO;
+  seriesId?: string | null;
   startTime: string; // ISO
   endTime: string;   // ISO
   purpose: string;

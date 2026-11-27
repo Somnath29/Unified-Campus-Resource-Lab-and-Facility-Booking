@@ -53,6 +53,11 @@ enum PriorityLevel {
   URGENT
 }
 
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+}
+
 model User {
   id                String         @id @default(uuid())
   email             String         @unique
@@ -67,6 +72,7 @@ model User {
   isActive          Boolean        @default(true)
   passwordChangedAt DateTime?
   bookings          Booking[]
+  bookingSeries     BookingSeries[]
   notifications     Notification[]
   auditLogs         AuditLog[]
   idempotencyKeys   IdempotencyKey[]
@@ -92,6 +98,7 @@ model Resource {
   operatingHours     String           @default("08:00 AM - 08:00 PM")
   deletedAt          DateTime?
   bookings           Booking[]
+  bookingSeries      BookingSeries[]
   timetableEntries   TimetableEntry[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
@@ -103,33 +110,58 @@ model Resource {
   @@index([deletedAt])
 }
 
+model BookingSeries {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId  String
+  resource    Resource            @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  frequency   RecurrenceFrequency
+  interval    Int                 @default(1)
+  weekdays    String[]            @default([])
+  startDate   DateTime
+  until       DateTime?
+  count       Int?
+  timeOfDay   String
+  duration    Int
+  bookings    Booking[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([userId])
+  @@index([resourceId])
+}
+
 model Booking {
-  id                 String        @id @default(uuid())
-  bookingNumber      String        @unique
+  id                 String         @id @default(uuid())
+  bookingNumber      String         @unique
   userId             String
-  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   resourceId         String
-  resource           Resource      @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  resource           Resource       @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  seriesId           String?
+  series             BookingSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   startTime          DateTime
   endTime            DateTime
   purpose            String
-  activityType       ActivityType  @default(PROJECT_WORK)
-  expectedAttendance Int           @default(1)
-  priority           PriorityLevel @default(NORMAL)
-  status             BookingStatus @default(PENDING)
-  checkInToken       String?       @unique
+  activityType       ActivityType   @default(PROJECT_WORK)
+  expectedAttendance Int            @default(1)
+  priority           PriorityLevel  @default(NORMAL)
+  status             BookingStatus  @default(PENDING)
+  checkInToken       String?        @unique
   checkedInAt        DateTime?
   releaseDeadline    DateTime?
   approvalNotes      String?
   rejectionReason    String?
   departmentId       String?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   @@index([resourceId, startTime, endTime])
   @@index([userId])
   @@index([status, startTime])
   @@index([status])
+  @@index([seriesId])
 }
 
 model TimetableEntry {

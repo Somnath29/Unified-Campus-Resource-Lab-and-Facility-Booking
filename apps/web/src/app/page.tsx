@@ -32,6 +32,7 @@ import {
   BookingDTO,
   DashboardStats,
   ResourceRecommendationItem,
+  QuotaResponse,
 } from '@lpu/shared';
 import {
   getCurrentKolkataDateString,
@@ -49,6 +50,7 @@ export default function DashboardPage() {
 
   // Dashboard Data State (initialized to null to prevent stale/mock data display)
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [quotaData, setQuotaData] = useState<QuotaResponse | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<BookingDTO[]>([]);
   const [recommendedResources, setRecommendedResources] = useState<ResourceDTO[]>([]);
   const [timetableClasses, setTimetableClasses] = useState<any[]>([]);
@@ -92,12 +94,16 @@ export default function DashboardPage() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const res = await api.dashboard.getStats();
+      const [res, quotaRes] = await Promise.all([
+        api.dashboard.getStats(),
+        api.me.quota().catch(() => null),
+      ]);
       if (res.stats) setStats(res.stats);
       if (res.upcomingBookings) setUpcomingBookings(res.upcomingBookings);
       if (res.recommendedResources) setRecommendedResources(res.recommendedResources);
       if (res.timetableClasses) setTimetableClasses(res.timetableClasses);
       if (res.recentActivity) setRecentActivity(res.recentActivity);
+      if (quotaRes) setQuotaData(quotaRes);
     } catch (err: any) {
       console.error('Error loading dashboard data:', err);
       setErrorMessage(err.message || 'Unable to load dashboard records.');
@@ -291,13 +297,19 @@ export default function DashboardPage() {
                 <div className="text-2xl font-black text-[#292929]">
                   {isLoading
                     ? '...'
+                    : quotaData
+                    ? `${quotaData.remainingWeeklyQuota}h`
                     : stats
                     ? `${stats.remainingWeeklyQuota}h`
                     : '20h'}
                 </div>
                 <div className="text-xs font-bold text-gray-700">Weekly Quota Remaining</div>
                 <div className="text-[11px] text-gray-400">
-                  Max: {stats ? `${stats.maxWeeklyHours}h / week` : '20h / week'}
+                  {quotaData
+                    ? `${quotaData.currentWeeklyHours}h of ${quotaData.maxWeeklyHours}h used`
+                    : stats
+                    ? `Max: ${stats.maxWeeklyHours}h / week`
+                    : '20h / week'}
                 </div>
               </div>
               <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#1976B9]">
@@ -319,6 +331,99 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Weekly Quota Meter Card (Authoritative A7 Policy Engine) */}
+          {quotaData && (
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#1976B9]">
+                    <PieChart className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-extrabold text-[#292929] flex items-center gap-2">
+                      <span>Weekly Allocation Quota Meter</span>
+                      <span className="text-[11px] font-normal text-gray-400">
+                        ({formatKolkataDate(quotaData.periodStart)} – {formatKolkataDate(quotaData.periodEnd)})
+                      </span>
+                    </h2>
+                    <p className="text-[11px] text-gray-500">
+                      Policy:{' '}
+                      <span className="font-semibold text-gray-700">
+                        {quotaData.policyName}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-gray-800">
+                      {quotaData.currentWeeklyHours}h of {quotaData.maxWeeklyHours}h used
+                    </span>
+                    <span className="text-[11px] text-emerald-600 font-bold ml-1.5">
+                      ({quotaData.remainingWeeklyQuota}h remaining)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadDashboardData}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition"
+                    title="Refresh Quota"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Visual Progress Bar */}
+              {(() => {
+                const usedPercent = Math.min(
+                  100,
+                  Math.round((quotaData.currentWeeklyHours / quotaData.maxWeeklyHours) * 100)
+                );
+                const barColor =
+                  usedPercent >= 100
+                    ? 'bg-red-500'
+                    : usedPercent >= 75
+                    ? 'bg-amber-500'
+                    : 'bg-[#F58220]';
+
+                return (
+                  <div className="space-y-1.5">
+                    <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden p-0.5">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                        style={{ width: `${usedPercent}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] text-gray-400">
+                      <span>0h used (100% free)</span>
+                      <span>{usedPercent}% quota utilized</span>
+                      <span>Cap: {quotaData.maxWeeklyHours}h / week</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Warning or Critical Alert Banner */}
+              {quotaData.remainingWeeklyQuota <= 0 ? (
+                <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>
+                    <strong>Quota Exhausted:</strong> You have reached your maximum booking quota ({quotaData.maxWeeklyHours}h) for this week.
+                  </span>
+                </div>
+              ) : quotaData.remainingWeeklyQuota < 4 ? (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-xs text-amber-800 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>
+                    <strong>Quota Running Low:</strong> Only {quotaData.remainingWeeklyQuota} hour(s) remaining for reservations this week.
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           {/* Two-Column Layout */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

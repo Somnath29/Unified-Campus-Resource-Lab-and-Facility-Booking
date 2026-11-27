@@ -121,6 +121,34 @@ export const api = {
     },
     getById: (id: string) => apiRequest(`/bookings/${id}`),
     cancel: (id: string, reason?: string) => apiRequest(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    createSeries: (body: import('@lpu/shared').BookingSeriesRequest, idempotencyKey?: string) =>
+      apiRequest<import('@lpu/shared').BookingSeriesResponse>('/bookings/series', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+          'Idempotency-Key':
+            idempotencyKey ||
+            (typeof crypto !== 'undefined' && crypto.randomUUID
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`),
+        },
+      }),
+    previewSeries: (body: import('@lpu/shared').BookingSeriesPreviewRequest) =>
+      apiRequest<import('@lpu/shared').BookingSeriesPreviewResponse>('/bookings/series/preview', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    cancelSeries: (seriesId: string, body: import('@lpu/shared').SeriesCancellationRequest) =>
+      apiRequest<import('@lpu/shared').SeriesCancellationResponse>(`/bookings/series/${seriesId}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
+  me: {
+    quota: (date?: string) => {
+      const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+      return apiRequest<import('@lpu/shared').QuotaResponse>(`/me/quota${qs}`);
+    },
   },
   approvals: {
     list: (status?: string) => {

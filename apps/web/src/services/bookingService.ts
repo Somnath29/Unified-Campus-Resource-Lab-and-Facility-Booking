@@ -55,7 +55,7 @@ export function computeRequestHash(input: CreateBookingInput): string {
 /**
  * Generates a cryptographically secure, unique 6-digit check-in PIN.
  */
-async function generateUniqueCheckInPin(tx: Prisma.TransactionClient): Promise<string> {
+export async function generateUniqueCheckInPin(tx: Prisma.TransactionClient): Promise<string> {
   let attempts = 0;
   const maxAttempts = 10;
 
@@ -78,7 +78,7 @@ async function generateUniqueCheckInPin(tx: Prisma.TransactionClient): Promise<s
 /**
  * Fetches the next sequential booking number from PostgreSQL sequence booking_number_seq.
  */
-async function getNextBookingNumber(tx: Prisma.TransactionClient): Promise<string> {
+export async function getNextBookingNumber(tx: Prisma.TransactionClient): Promise<string> {
   const currentYear = new Date().getFullYear();
   try {
     const seqResult = await tx.$queryRaw<{ nextval: bigint }[]>`SELECT nextval('booking_number_seq')::bigint as nextval`;

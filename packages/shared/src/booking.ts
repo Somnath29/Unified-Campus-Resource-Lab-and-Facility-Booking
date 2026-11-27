@@ -102,3 +102,166 @@ export interface ResourceRecommendationResponse {
     category?: string;
   };
 }
+
+// -------------------------------------------------------------
+// R5 Recurring Bookings, Series & Quota Meter Contracts
+// -------------------------------------------------------------
+
+export type RecurrenceFrequency = 'DAILY' | 'WEEKLY';
+
+export type Weekday =
+  | 'MONDAY'
+  | 'TUESDAY'
+  | 'WEDNESDAY'
+  | 'THURSDAY'
+  | 'FRIDAY'
+  | 'SATURDAY'
+  | 'SUNDAY';
+
+export type BookingSeriesMode = 'ATOMIC' | 'PARTIAL';
+
+export type OccurrenceCancellationScope = 'ONE' | 'THIS_AND_FOLLOWING' | 'ENTIRE_SERIES';
+
+export type BookingOccurrenceStatus =
+  | 'AVAILABLE'
+  | 'CREATED'
+  | 'REQUIRES_APPROVAL'
+  | 'CONFLICT'
+  | 'TIMETABLE_CLASH'
+  | 'POLICY_REFUSAL'
+  | 'INVALID'
+  | 'SKIPPED_ATOMIC_FAILURE';
+
+export interface BookingOccurrence {
+  date: string; // YYYY-MM-DD in Asia/Kolkata
+  startTime: string; // HH:mm
+  endTime: string; // HH:mm
+  durationMinutes: number;
+  sequenceNumber: number;
+  startUtc: string; // ISO
+  endUtc: string;   // ISO
+}
+
+export interface BookingOccurrenceResult {
+  date: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  sequenceNumber: number;
+  status: BookingOccurrenceStatus;
+  isCreated: boolean;
+  bookingId?: string;
+  bookingNumber?: string;
+  approvalStatus?: BookingStatus;
+  reason?: string;
+  conflictReason?: string;
+  remainingWeeklyQuota?: number;
+  autoReleaseMinutes?: number;
+}
+
+export interface BookingSeriesDTO {
+  id: string;
+  userId: string;
+  resourceId: string;
+  resource?: ResourceDTO;
+  frequency: RecurrenceFrequency;
+  interval: number;
+  weekdays: string[];
+  startDate: string;
+  until?: string | null;
+  count?: number | null;
+  timeOfDay: string;
+  duration: number;
+  createdAt: string;
+  updatedAt: string;
+  bookings?: BookingDTO[];
+}
+
+export interface BookingSeriesRequest {
+  resourceId: string;
+  frequency: RecurrenceFrequency;
+  interval: number;
+  weekdays?: string[];
+  startDate: string; // YYYY-MM-DD
+  until?: string;    // YYYY-MM-DD
+  count?: number;    // positive integer <= 16
+  startTime: string; // HH:mm
+  endTime?: string;  // HH:mm
+  durationMinutes?: number;
+  expectedAttendance: number;
+  activityType: ActivityType;
+  purpose: string;
+  bookingMode: BookingSeriesMode;
+  priority?: PriorityLevel;
+}
+
+export interface BookingSeriesResponse {
+  seriesId?: string;
+  bookingMode: BookingSeriesMode;
+  totalOccurrences: number;
+  successfulCount: number;
+  failedCount: number;
+  results: BookingOccurrenceResult[];
+  message: string;
+}
+
+export interface BookingSeriesPreviewRequest {
+  resourceId: string;
+  frequency: RecurrenceFrequency;
+  interval: number;
+  weekdays?: string[];
+  startDate: string;
+  until?: string;
+  count?: number;
+  startTime: string;
+  endTime?: string;
+  durationMinutes?: number;
+  expectedAttendance: number;
+  activityType?: ActivityType;
+  purpose?: string;
+}
+
+export interface WeeklyQuotaBreakdown {
+  weekStart: string; // YYYY-MM-DD
+  weekEnd: string;   // YYYY-MM-DD
+  maxWeeklyHours: number;
+  alreadyBookedHours: number;
+  seriesRequestedHours: number;
+  remainingQuotaAfterSeries: number;
+  isExceeded: boolean;
+}
+
+export interface BookingSeriesPreviewResponse {
+  totalOccurrences: number;
+  validOccurrencesCount: number;
+  conflictingOccurrencesCount: number;
+  occurrences: BookingOccurrenceResult[];
+  weeklyBreakdowns: WeeklyQuotaBreakdown[];
+}
+
+export interface SeriesCancellationRequest {
+  scope: OccurrenceCancellationScope;
+  targetBookingId?: string;
+  reason?: string;
+}
+
+export interface SeriesCancellationResponse {
+  scope: OccurrenceCancellationScope;
+  cancelledCount: number;
+  skippedCount: number;
+  cancelledBookingIds: string[];
+  failedBookingIds?: { id: string; reason: string }[];
+  message: string;
+}
+
+export interface QuotaResponse {
+  periodStart: string; // YYYY-MM-DD or ISO
+  periodEnd: string;   // YYYY-MM-DD or ISO
+  currentWeeklyHours: number;
+  remainingWeeklyQuota: number;
+  maxWeeklyHours: number;
+  role: string;
+  department: string;
+  policyName: string;
+  message?: string;
+}

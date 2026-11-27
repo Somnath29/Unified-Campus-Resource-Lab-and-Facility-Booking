@@ -29,7 +29,24 @@ import {
   BookingPreviewResponse,
   AlternativeSlot,
   AvailabilitySlot,
+  RecurrenceFrequency,
+  Weekday,
+  BookingSeriesMode,
+  BookingSeriesPreviewResponse,
+  BookingSeriesResponse,
+  BookingOccurrenceResult,
+  QuotaResponse,
 } from '@lpu/shared';
+import {
+  Repeat,
+  CalendarRange,
+  Layers,
+  CheckCheck,
+  AlertTriangle,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 
 const bookingSchema = z
   .object({
@@ -84,6 +101,79 @@ function addMinutesToTime(timeStr: string, minutes: number): string {
   const newH = Math.min(23, Math.floor(totalM / 60));
   const newM = totalM % 60;
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+}
+
+/**
+ * Weekday ordering for recurring series
+ */
+const WEEKDAY_ORDER: { label: string; value: Weekday }[] = [
+  { label: 'Mon', value: 'MONDAY' },
+  { label: 'Tue', value: 'TUESDAY' },
+  { label: 'Wed', value: 'WEDNESDAY' },
+  { label: 'Thu', value: 'THURSDAY' },
+  { label: 'Fri', value: 'FRIDAY' },
+  { label: 'Sat', value: 'SATURDAY' },
+  { label: 'Sun', value: 'SUNDAY' },
+];
+
+function getWeekdayFromDate(dateStr: string): Weekday {
+  if (!dateStr || !dateStr.includes('-')) return 'MONDAY';
+  const parts = dateStr.split('-').map(Number);
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  const day = d.getUTCDay(); // 0 = Sun, 1 = Mon ...
+  const map: Weekday[] = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+  return map[day];
+}
+
+/**
+ * Generates an RFC 5545 iCalendar (.ics) file for an entire recurring series.
+ */
+function downloadSeriesIcsCalendar(seriesRes: BookingSeriesResponse, resource: any) {
+  const nowUtc = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const events = (seriesRes.results || [])
+    .filter((r) => r.isCreated && r.bookingNumber)
+    .map((r) => {
+      const dateParts = r.date.split('-').map(Number);
+      const [sH, sM] = r.startTime.split(':').map(Number);
+      const [eH, eM] = r.endTime.split(':').map(Number);
+      // In IST (UTC+5:30)
+      const startUtc = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], sH - 5, sM - 30)).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      const endUtc = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], eH - 5, eM - 30)).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      return [
+        'BEGIN:VEVENT',
+        `UID:${r.bookingNumber || r.bookingId}@lpu.in`,
+        `DTSTAMP:${nowUtc}`,
+        `DTSTART:${startUtc}`,
+        `DTEND:${endUtc}`,
+        `SUMMARY:Recurring: ${resource?.name || 'Campus Resource'} (${r.bookingNumber})`,
+        `DESCRIPTION:Series Reservation\\nStatus: ${r.status}\\nReference: ${r.bookingNumber}`,
+        `LOCATION:${resource?.name || 'LPU Room'}${resource?.building ? ', ' + resource.building : ''}`,
+        `STATUS:CONFIRMED`,
+        'END:VEVENT',
+      ].join('\r\n');
+    });
+
+  if (events.length === 0) return;
+
+  const icsLines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//LPU Campus Booking Platform//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    ...events,
+    'END:VCALENDAR',
+  ];
+
+  const blob = new Blob([icsLines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', `series-${seriesRes.seriesId || Date.now()}.ics`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -153,6 +243,21 @@ export function BookingModal({
   const [successBooking, setSuccessBooking] = useState<any | null>(null);
   const [copiedPin, setCopiedPin] = useState<boolean>(false);
 
+  // R5 Recurrence State
+  const [isRecurring, setIsRecurring] = useState<boolean>(false);
+  const [recurrenceFrequency, setRecurrenceFrequency] = useState<RecurrenceFrequency>('WEEKLY');
+  const [recurrenceInterval, setRecurrenceInterval] = useState<number>(1);
+  const [recurrenceWeekdays, setRecurrenceWeekdays] = useState<Weekday[]>(['MONDAY']);
+  const [endCondition, setEndCondition] = useState<'count' | 'until'>('count');
+  const [recurrenceCount, setRecurrenceCount] = useState<number>(4);
+  const [recurrenceUntil, setRecurrenceUntil] = useState<string>('');
+  const [bookingMode, setBookingMode] = useState<BookingSeriesMode>('ATOMIC');
+  const [seriesPreviewData, setSeriesPreviewData] = useState<BookingSeriesPreviewResponse | null>(null);
+  const [isSeriesPreviewLoading, setIsSeriesPreviewLoading] = useState<boolean>(false);
+  const [successSeries, setSuccessSeries] = useState<BookingSeriesResponse | null>(null);
+  const [authoritativeQuota, setAuthoritativeQuota] = useState<QuotaResponse | null>(null);
+  const [showOccurrenceList, setShowOccurrenceList] = useState<boolean>(false);
+
   const defaultDate = useMemo(() => {
     return preselectedDate || new Date().toISOString().split('T')[0];
   }, [preselectedDate]);
@@ -186,12 +291,25 @@ export function BookingModal({
   const formActivityType = watch('activityType');
   const formPurpose = watch('purpose');
 
-  // Load resource list if no preselected resource
+  // Load resource list & authoritative quota on modal open
   useEffect(() => {
     if (isOpen) {
       setSubmissionError(null);
       setSuccessBooking(null);
+      setSuccessSeries(null);
       setCopiedPin(false);
+      setIsRecurring(false);
+      setSeriesPreviewData(null);
+      setRecurrenceFrequency('WEEKLY');
+      setRecurrenceInterval(1);
+      setRecurrenceCount(4);
+      setEndCondition('count');
+      setBookingMode('ATOMIC');
+      setShowOccurrenceList(false);
+
+      // Load authoritative quota from API
+      api.me.quota().then((q) => setAuthoritativeQuota(q)).catch(() => {});
+
       // New idempotency key per modal session
       setIdempotencyKey(
         typeof crypto !== 'undefined' && crypto.randomUUID
@@ -222,6 +340,14 @@ export function BookingModal({
     preselectedEndTime,
     setValue,
   ]);
+
+  // Synchronize default recurrence weekday when date changes
+  useEffect(() => {
+    if (formDate) {
+      const wk = getWeekdayFromDate(formDate);
+      setRecurrenceWeekdays([wk]);
+    }
+  }, [formDate]);
 
   // Current resource object
   const currentResource = useMemo(() => {
@@ -331,31 +457,133 @@ export function BookingModal({
     formPurpose,
   ]);
 
+  // Live Recurring Series Preview with 350ms debounce
+  useEffect(() => {
+    if (!isOpen || !isRecurring || !formResourceId || !formDate || !formStartTime || !formEndTime) {
+      setSeriesPreviewData(null);
+      return;
+    }
+
+    if (formEndTime <= formStartTime) {
+      setSeriesPreviewData(null);
+      return;
+    }
+
+    let active = true;
+    setIsSeriesPreviewLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const [sH, sM] = formStartTime.split(':').map(Number);
+        const [eH, eM] = formEndTime.split(':').map(Number);
+        const durationMinutes = (eH * 60 + eM) - (sH * 60 + sM);
+
+        const previewRes = await api.bookings.previewSeries({
+          resourceId: formResourceId,
+          frequency: recurrenceFrequency,
+          interval: Number(recurrenceInterval) || 1,
+          weekdays: recurrenceFrequency === 'WEEKLY' ? recurrenceWeekdays : undefined,
+          startDate: formDate,
+          count: endCondition === 'count' ? Number(recurrenceCount) || 1 : undefined,
+          until: endCondition === 'until' ? recurrenceUntil : undefined,
+          startTime: formStartTime,
+          durationMinutes,
+          expectedAttendance: Number(formAttendance) || 1,
+          activityType: formActivityType as ActivityType,
+          purpose: formPurpose || 'Campus Series Reservation',
+        });
+
+        if (active) {
+          setSeriesPreviewData(previewRes);
+        }
+      } catch (err: any) {
+        if (active) {
+          setSeriesPreviewData(null);
+        }
+      } finally {
+        if (active) {
+          setIsSeriesPreviewLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    isOpen,
+    isRecurring,
+    formResourceId,
+    formDate,
+    formStartTime,
+    formEndTime,
+    formAttendance,
+    formActivityType,
+    formPurpose,
+    recurrenceFrequency,
+    recurrenceInterval,
+    recurrenceWeekdays,
+    endCondition,
+    recurrenceCount,
+    recurrenceUntil,
+    bookingMode,
+  ]);
+
   // Form Submission Handler
   const onSubmit = async (values: BookingFormValues) => {
     setSubmissionError(null);
     setIsSubmitting(true);
 
     try {
-      const startDateTime = new Date(`${values.date}T${values.startTime}:00`).toISOString();
-      const endDateTime = new Date(`${values.date}T${values.endTime}:00`).toISOString();
+      if (isRecurring) {
+        const [sH, sM] = values.startTime.split(':').map(Number);
+        const [eH, eM] = values.endTime.split(':').map(Number);
+        const durationMinutes = (eH * 60 + eM) - (sH * 60 + sM);
 
-      const res = await api.bookings.create(
-        {
+        const seriesPayload = {
           resourceId: values.resourceId,
-          startTime: startDateTime,
-          endTime: endDateTime,
-          purpose: values.purpose.trim(),
-          activityType: values.activityType as ActivityType,
+          frequency: recurrenceFrequency,
+          interval: Number(recurrenceInterval) || 1,
+          weekdays: recurrenceFrequency === 'WEEKLY' ? recurrenceWeekdays : undefined,
+          startDate: values.date,
+          count: endCondition === 'count' ? Number(recurrenceCount) || 1 : undefined,
+          until: endCondition === 'until' ? recurrenceUntil : undefined,
+          startTime: values.startTime,
+          durationMinutes,
           expectedAttendance: Number(values.expectedAttendance),
+          activityType: values.activityType as ActivityType,
+          purpose: values.purpose.trim(),
           priority: values.priority as PriorityLevel,
-        },
-        idempotencyKey
-      );
+          bookingMode,
+        };
 
-      setSuccessBooking(res.booking);
-      if (onBookingSuccess) {
-        onBookingSuccess();
+        const res = await api.bookings.createSeries(seriesPayload, idempotencyKey);
+        setSuccessSeries(res);
+        if (onBookingSuccess) {
+          onBookingSuccess();
+        }
+      } else {
+        const startDateTime = new Date(`${values.date}T${values.startTime}:00`).toISOString();
+        const endDateTime = new Date(`${values.date}T${values.endTime}:00`).toISOString();
+
+        const res = await api.bookings.create(
+          {
+            resourceId: values.resourceId,
+            startTime: startDateTime,
+            endTime: endDateTime,
+            purpose: values.purpose.trim(),
+            activityType: values.activityType as ActivityType,
+            expectedAttendance: Number(values.expectedAttendance),
+            priority: values.priority as PriorityLevel,
+          },
+          idempotencyKey
+        );
+
+        setSuccessBooking(res.booking);
+        if (onBookingSuccess) {
+          onBookingSuccess();
+        }
       }
     } catch (err: any) {
       setSubmissionError(err.message || 'Failed to submit booking reservation.');
@@ -386,7 +614,13 @@ export function BookingModal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-white sticky top-0 z-10">
           <div>
             <h2 id="booking-modal-title" className="text-xl font-bold text-gray-900">
-              {successBooking ? 'Booking Confirmation' : 'Reserve Campus Resource'}
+              {successSeries
+                ? 'Series Reservation Confirmation'
+                : successBooking
+                ? 'Booking Confirmation'
+                : isRecurring
+                ? 'Recurring Series Reservation'
+                : 'Reserve Campus Resource'}
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">
               {currentResource?.name || 'Classrooms, Auditoriums, Computer Labs & Facilities'}
@@ -403,7 +637,97 @@ export function BookingModal({
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {successBooking ? (
+          {successSeries ? (
+            /* ================= SERIES SUCCESS CONFIRMATION VIEW ================= */
+            <div className="py-4 space-y-6 text-center">
+              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+                <CheckCheck className="w-10 h-10" />
+              </div>
+
+              <div>
+                <span className="inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-2 bg-emerald-100 text-emerald-800">
+                  {recurrenceFrequency} Series Scheduled ({successSeries.bookingMode} Mode)
+                </span>
+                <h3 className="text-xl font-bold text-gray-900">
+                  Recurring Series Reserved!
+                </h3>
+                {successSeries.seriesId && (
+                  <p className="text-xs text-gray-600 mt-1">
+                    Series ID:{' '}
+                    <span className="font-mono font-bold text-gray-900 text-sm">
+                      {successSeries.seriesId}
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              {/* Stats Summary Pill Grid */}
+              <div className="grid grid-cols-3 gap-3 max-w-md mx-auto">
+                <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-center">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">Total Requested</span>
+                  <span className="text-xl font-black text-gray-900">{successSeries.totalOccurrences}</span>
+                </div>
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase block">Booked</span>
+                  <span className="text-xl font-black text-emerald-700">{successSeries.successfulCount}</span>
+                </div>
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-center">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase block">Skipped / Clashes</span>
+                  <span className="text-xl font-black text-amber-700">{successSeries.failedCount}</span>
+                </div>
+              </div>
+
+              {/* Occurrence Results List */}
+              <div className="bg-gray-50 p-4 rounded-xl text-left border border-gray-100 max-w-md mx-auto space-y-2 max-h-48 overflow-y-auto">
+                <span className="text-xs font-bold text-gray-700 block mb-1">
+                  Scheduled Dates & Status:
+                </span>
+                {successSeries.results.map((r, idx) => (
+                  <div key={idx} className="flex items-center justify-between py-1.5 border-b border-gray-200/60 last:border-0 text-xs">
+                    <div>
+                      <span className="font-semibold text-gray-800">{r.date}</span>
+                      <span className="text-gray-400 text-[11px] ml-1">({r.startTime} - {r.endTime})</span>
+                      {r.bookingNumber && (
+                        <span className="font-mono text-[10px] text-gray-500 block">
+                          Ref: {r.bookingNumber}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      {r.isCreated ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                          {r.approvalStatus || 'RESERVED'}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800" title={r.reason}>
+                          {r.status}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Actions: Add Series to Calendar (.ics) & Done */}
+              <div className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto pt-2">
+                <button
+                  type="button"
+                  onClick={() => downloadSeriesIcsCalendar(successSeries, currentResource)}
+                  className="flex-1 py-2.5 px-4 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold rounded-xl shadow-sm transition flex items-center justify-center gap-2 text-xs"
+                >
+                  <Download className="w-4 h-4 text-gray-500" />
+                  Add Series to Calendar (.ics)
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 py-2.5 px-4 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow transition text-xs"
+                >
+                  Done & View Dashboard
+                </button>
+              </div>
+            </div>
+          ) : successBooking ? (
             /* ================= SUCCESS CONFIRMATION VIEW ================= */
             <div className="py-4 space-y-6 text-center">
               <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
@@ -546,7 +870,7 @@ export function BookingModal({
                     </div>
                   </div>
 
-                  {previewData?.alternativeSlots && previewData.alternativeSlots.length > 0 && (
+                  {previewData?.alternativeSlots && previewData.alternativeSlots.length > 0 && !isRecurring && (
                     <div className="pt-2 border-t border-red-100">
                       <span className="font-bold text-red-800 block mb-1">
                         Recommended Alternative Slots:
@@ -620,7 +944,9 @@ export function BookingModal({
               <div className="space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Date *</label>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">
+                      {isRecurring ? 'Series Start Date *' : 'Date *'}
+                    </label>
                     <input
                       type="date"
                       {...register('date')}
@@ -739,6 +1065,251 @@ export function BookingModal({
                 </div>
               </div>
 
+              {/* R5 Recurrence Toggle & Configuration */}
+              <div className="p-3.5 bg-orange-50/50 border border-orange-200/70 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-orange-100 flex items-center justify-center text-[#F58220]">
+                      <Repeat className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-gray-900 block">
+                        Repeat this booking (Recurring Series)
+                      </span>
+                      <span className="text-[11px] text-gray-500">
+                        Schedule recurring weekly sessions or multi-day reservations
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Toggle Switch */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isRecurring}
+                    onClick={() => setIsRecurring(!isRecurring)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      isRecurring ? 'bg-[#F58220]' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        isRecurring ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Expanded Recurrence Options */}
+                {isRecurring && (
+                  <div className="pt-2 border-t border-orange-200/60 space-y-3 text-xs">
+                    {/* Frequency & Interval */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                          Frequency
+                        </label>
+                        <div className="grid grid-cols-2 gap-1.5 p-1 bg-white rounded-lg border border-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => setRecurrenceFrequency('WEEKLY')}
+                            className={`py-1 rounded text-center text-xs font-bold transition ${
+                              recurrenceFrequency === 'WEEKLY'
+                                ? 'bg-[#F58220] text-white shadow-sm'
+                                : 'text-gray-600 hover:bg-gray-100'
+                            }`}
+                          >
+                            Weekly
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRecurrenceFrequency('DAILY')}
+                            className={`py-1 rounded text-center text-xs font-bold transition ${
+                              recurrenceFrequency === 'DAILY'
+                                ? 'bg-[#F58220] text-white shadow-sm'
+                                : 'text-gray-600 hover:bg-gray-100'
+                            }`}
+                          >
+                            Daily
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                          Repeat Every
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={recurrenceFrequency === 'DAILY' ? 12 : 16}
+                            value={recurrenceInterval}
+                            onChange={(e) => setRecurrenceInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-20 px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-center focus:outline-none focus:ring-2 focus:ring-[#F58220]/20"
+                          />
+                          <span className="text-gray-600 font-medium">
+                            {recurrenceFrequency === 'WEEKLY'
+                              ? recurrenceInterval === 1
+                                ? 'week'
+                                : 'weeks'
+                              : recurrenceInterval === 1
+                              ? 'day'
+                              : 'days'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Weekday Selector (Only when Weekly) */}
+                    {recurrenceFrequency === 'WEEKLY' && (
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                          Repeat On Weekdays
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {WEEKDAY_ORDER.map(({ label, value }) => {
+                            const isSelected = recurrenceWeekdays.includes(value);
+                            return (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    if (recurrenceWeekdays.length > 1) {
+                                      setRecurrenceWeekdays(recurrenceWeekdays.filter((w) => w !== value));
+                                    }
+                                  } else {
+                                    setRecurrenceWeekdays([...recurrenceWeekdays, value]);
+                                  }
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition border ${
+                                  isSelected
+                                    ? 'bg-[#F58220] text-white border-[#F58220] shadow-sm'
+                                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* End Condition */}
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        End Condition (Max 16 occurrences)
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label
+                          className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition ${
+                            endCondition === 'count'
+                              ? 'bg-white border-[#F58220] shadow-xs'
+                              : 'bg-white/60 border-gray-200 hover:bg-white'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="endCondition"
+                            checked={endCondition === 'count'}
+                            onChange={() => setEndCondition('count')}
+                            className="text-[#F58220] focus:ring-[#F58220]"
+                          />
+                          <span className="font-semibold text-gray-800">End after:</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={16}
+                            disabled={endCondition !== 'count'}
+                            value={recurrenceCount}
+                            onChange={(e) =>
+                              setRecurrenceCount(Math.min(16, Math.max(1, parseInt(e.target.value) || 1)))
+                            }
+                            className="w-14 px-2 py-0.5 bg-gray-50 border border-gray-200 rounded text-center text-xs font-bold focus:outline-none"
+                          />
+                          <span className="text-gray-500 text-[11px]">times</span>
+                        </label>
+
+                        <label
+                          className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition ${
+                            endCondition === 'until'
+                              ? 'bg-white border-[#F58220] shadow-xs'
+                              : 'bg-white/60 border-gray-200 hover:bg-white'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="endCondition"
+                            checked={endCondition === 'until'}
+                            onChange={() => setEndCondition('until')}
+                            className="text-[#F58220] focus:ring-[#F58220]"
+                          />
+                          <span className="font-semibold text-gray-800">End on:</span>
+                          <input
+                            type="date"
+                            min={formDate}
+                            disabled={endCondition !== 'until'}
+                            value={recurrenceUntil}
+                            onChange={(e) => setRecurrenceUntil(e.target.value)}
+                            className="flex-1 px-2 py-0.5 bg-gray-50 border border-gray-200 rounded text-xs focus:outline-none"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Booking Mode: Atomic vs Partial */}
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Series Execution Mode
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBookingMode('ATOMIC')}
+                          className={`p-2.5 rounded-xl border text-left transition ${
+                            bookingMode === 'ATOMIC'
+                              ? 'bg-white border-[#F58220] ring-1 ring-[#F58220] shadow-xs'
+                              : 'bg-white/60 border-gray-200 hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-900">Atomic Mode</span>
+                            {bookingMode === 'ATOMIC' && (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-[#F58220]" />
+                            )}
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-0.5">
+                            All-or-nothing: if any date encounters a timetable clash or booking conflict, 0 bookings are made.
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setBookingMode('PARTIAL')}
+                          className={`p-2.5 rounded-xl border text-left transition ${
+                            bookingMode === 'PARTIAL'
+                              ? 'bg-white border-[#F58220] ring-1 ring-[#F58220] shadow-xs'
+                              : 'bg-white/60 border-gray-200 hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-900">Partial Mode</span>
+                            {bookingMode === 'PARTIAL' && (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-[#F58220]" />
+                            )}
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-0.5">
+                            Book available dates and skip conflicts or policy refusals with transparent reports.
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Activity Type & Attendance */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -804,78 +1375,197 @@ export function BookingModal({
                 )}
               </div>
 
-              {/* Real-time Policy Preview Card */}
-              <div className="space-y-2">
-                {isPreviewLoading ? (
-                  <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center gap-2 text-xs text-gray-500">
-                    <span className="inline-block animate-spin w-3.5 h-3.5 border-2 border-[#F58220] border-t-transparent rounded-full" />
-                    <span>Evaluating campus booking policies & weekly quota...</span>
-                  </div>
-                ) : previewData ? (
-                  <div
-                    className={`p-3.5 rounded-xl border text-xs space-y-2 ${
-                      previewData.decision === 'AUTO_CONFIRMED'
-                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                        : previewData.decision === 'REQUIRES_APPROVAL'
-                        ? 'bg-blue-50/70 border-blue-200 text-blue-900'
-                        : 'bg-red-50/70 border-red-200 text-red-900'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-bold">
-                        {previewData.decision === 'AUTO_CONFIRMED' ? (
-                          <>
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                            <span>Instant Auto-Confirmation</span>
-                          </>
-                        ) : previewData.decision === 'REQUIRES_APPROVAL' ? (
-                          <>
-                            <Clock className="w-4 h-4 text-blue-600" />
-                            <span>Requires Approver Endorsement</span>
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="w-4 h-4 text-red-600" />
-                            <span>Policy Restriction / Conflict</span>
-                          </>
+              {/* Live Preview Card: Series Preview if isRecurring, otherwise Single Booking Preview */}
+              {isRecurring ? (
+                <div className="space-y-2">
+                  {isSeriesPreviewLoading ? (
+                    <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center gap-2 text-xs text-gray-500">
+                      <span className="inline-block animate-spin w-3.5 h-3.5 border-2 border-[#F58220] border-t-transparent rounded-full" />
+                      <span>Simulating recurring occurrences & checking conflict state...</span>
+                    </div>
+                  ) : seriesPreviewData ? (
+                    <div className="p-3.5 bg-gray-50/90 border border-gray-200 rounded-xl space-y-3 text-xs">
+                      {/* Summary Banner */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold">
+                          {seriesPreviewData.conflictingOccurrencesCount > 0 ? (
+                            bookingMode === 'ATOMIC' ? (
+                              <div className="flex items-center gap-1.5 text-red-700">
+                                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                                <span>Conflict Detected ({seriesPreviewData.conflictingOccurrencesCount} date clashes)</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-amber-800">
+                                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                                <span>Partial Booking ({seriesPreviewData.validOccurrencesCount} of {seriesPreviewData.totalOccurrences} dates available)</span>
+                              </div>
+                            )
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-emerald-800">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              <span>All {seriesPreviewData.totalOccurrences} Occurrences Available</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <span className="px-2 py-0.5 bg-white rounded-md font-mono text-[10px] font-bold border border-gray-200">
+                          {seriesPreviewData.totalOccurrences} dates • {bookingMode}
+                        </span>
+                      </div>
+
+                      {/* Conflict Guidance message */}
+                      {seriesPreviewData.conflictingOccurrencesCount > 0 && bookingMode === 'ATOMIC' && (
+                        <p className="text-[11px] text-red-700 bg-red-50 p-2 rounded-lg border border-red-200">
+                          Atomic mode requires every date to be conflict-free. Switch to <strong>Partial Mode</strong> above to automatically book the {seriesPreviewData.validOccurrencesCount} available dates and skip clashes, or select a different time slot.
+                        </p>
+                      )}
+
+                      {/* Weekly Quota Breakdown */}
+                      {seriesPreviewData.weeklyBreakdowns && seriesPreviewData.weeklyBreakdowns.length > 0 && (
+                        <div className="pt-2 border-t border-gray-200/80 space-y-1.5">
+                          <span className="font-bold text-gray-700 text-[11px] block">
+                            Cumulative Weekly Quota Usage:
+                          </span>
+                          <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                            {seriesPreviewData.weeklyBreakdowns.map((wb, idx) => (
+                              <div
+                                key={idx}
+                                className={`flex items-center justify-between p-1.5 rounded-lg text-[11px] ${
+                                  wb.isExceeded
+                                    ? 'bg-red-50 text-red-800 border border-red-200'
+                                    : 'bg-white text-gray-700 border border-gray-100'
+                                }`}
+                              >
+                                <span>{wb.weekStart} – {wb.weekEnd}</span>
+                                <span className="font-mono font-medium">
+                                  +{wb.seriesRequestedHours}h req • {wb.remainingQuotaAfterSeries}h remaining {wb.isExceeded && '⚠️ Exceeds!'}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Expandable Occurrence List */}
+                      <div className="pt-2 border-t border-gray-200/80">
+                        <button
+                          type="button"
+                          onClick={() => setShowOccurrenceList(!showOccurrenceList)}
+                          className="w-full flex items-center justify-between text-[11px] font-bold text-gray-700 hover:text-gray-900"
+                        >
+                          <span>Review Occurrence Schedule ({seriesPreviewData.occurrences.length} dates)</span>
+                          {showOccurrenceList ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+
+                        {showOccurrenceList && (
+                          <div className="mt-2 space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                            {seriesPreviewData.occurrences.map((occ, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center justify-between p-1.5 bg-white border border-gray-200 rounded-lg text-[11px]"
+                              >
+                                <span className="font-semibold text-gray-800">
+                                  {occ.date} ({occ.startTime} - {occ.endTime})
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    occ.status === 'AVAILABLE'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : occ.status === 'REQUIRES_APPROVAL'
+                                      ? 'bg-blue-100 text-blue-800'
+                                      : occ.status === 'TIMETABLE_CLASH'
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : 'bg-red-100 text-red-800'
+                                  }`}
+                                >
+                                  {occ.status.replace('_', ' ')}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </div>
-
-                      {/* Remaining Quota Badge */}
-                      <span className="px-2 py-0.5 bg-white/80 rounded-md font-mono text-[10px] font-bold border border-gray-200 shadow-2xs">
-                        Quota: {previewData.remainingWeeklyQuota}h / {previewData.maxWeeklyHours}h left
-                      </span>
                     </div>
-
-                    <p className="text-[11px] opacity-90">
-                      {previewData.reason ||
-                        previewData.policyMessages?.[0] ||
-                        'Request matches all policy rules.'}
-                    </p>
-
-                    {/* Show alternative slots right in preview if conflict detected */}
-                    {previewData.alternativeSlots && previewData.alternativeSlots.length > 0 && (
-                      <div className="pt-2 border-t border-black/5">
-                        <span className="font-bold text-[11px] block mb-1">
-                          Alternative Available Times:
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {previewData.alternativeSlots.map((alt, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => applyAlternativeSlot(alt)}
-                              className="px-2 py-0.5 bg-white rounded text-[10px] font-bold border border-gray-200 hover:bg-gray-50 transition"
-                            >
-                              {alt.startTime} - {alt.endTime} ({alt.date === formDate ? 'Today' : alt.date})
-                            </button>
-                          ))}
+                  ) : null}
+                </div>
+              ) : (
+                /* Single Booking Policy Preview Card */
+                <div className="space-y-2">
+                  {isPreviewLoading ? (
+                    <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center gap-2 text-xs text-gray-500">
+                      <span className="inline-block animate-spin w-3.5 h-3.5 border-2 border-[#F58220] border-t-transparent rounded-full" />
+                      <span>Evaluating campus booking policies & weekly quota...</span>
+                    </div>
+                  ) : previewData ? (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                        previewData.decision === 'AUTO_CONFIRMED'
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                          : previewData.decision === 'REQUIRES_APPROVAL'
+                          ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                          : 'bg-red-50/70 border-red-200 text-red-900'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold">
+                          {previewData.decision === 'AUTO_CONFIRMED' ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              <span>Instant Auto-Confirmation</span>
+                            </>
+                          ) : previewData.decision === 'REQUIRES_APPROVAL' ? (
+                            <>
+                              <Clock className="w-4 h-4 text-blue-600" />
+                              <span>Requires Approver Endorsement</span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className="w-4 h-4 text-red-600" />
+                              <span>Policy Restriction / Conflict</span>
+                            </>
+                          )}
                         </div>
+
+                        {/* Remaining Quota Badge */}
+                        <span className="px-2 py-0.5 bg-white/80 rounded-md font-mono text-[10px] font-bold border border-gray-200 shadow-2xs">
+                          Quota: {previewData.remainingWeeklyQuota}h / {previewData.maxWeeklyHours}h left
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
+
+                      <p className="text-[11px] opacity-90">
+                        {previewData.reason ||
+                          previewData.policyMessages?.[0] ||
+                          'Request matches all policy rules.'}
+                      </p>
+
+                      {/* Show alternative slots right in preview if conflict detected */}
+                      {previewData.alternativeSlots && previewData.alternativeSlots.length > 0 && (
+                        <div className="pt-2 border-t border-black/5">
+                          <span className="font-bold text-[11px] block mb-1">
+                            Alternative Available Times:
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {previewData.alternativeSlots.map((alt, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => applyAlternativeSlot(alt)}
+                                className="px-2 py-0.5 bg-white rounded text-[10px] font-bold border border-gray-200 hover:bg-gray-50 transition"
+                              >
+                                {alt.startTime} - {alt.endTime} ({alt.date === formDate ? 'Today' : alt.date})
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {/* Safety notice */}
               <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-start gap-2 text-xs text-gray-600">
@@ -890,14 +1580,30 @@ export function BookingModal({
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmitting || (previewData !== null && !previewData.allowed)}
+                  disabled={
+                    isSubmitting ||
+                    (isRecurring
+                      ? (bookingMode === 'ATOMIC' && (seriesPreviewData?.conflictingOccurrencesCount || 0) > 0) ||
+                        (seriesPreviewData !== null && seriesPreviewData.validOccurrencesCount === 0)
+                      : previewData !== null && !previewData.allowed)
+                  }
                   className="w-full py-3 bg-[#F58220] hover:bg-[#E06D0C] text-white font-bold rounded-xl shadow-md transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
                   {isSubmitting ? (
                     <>
                       <span className="inline-block animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                      <span>Submitting Reservation...</span>
+                      <span>{isRecurring ? 'Scheduling Recurring Series...' : 'Submitting Reservation...'}</span>
                     </>
+                  ) : isRecurring ? (
+                    <span>
+                      {bookingMode === 'ATOMIC' && (seriesPreviewData?.conflictingOccurrencesCount || 0) > 0
+                        ? 'Cannot Reserve (Atomic Conflicts Exist)'
+                        : seriesPreviewData?.validOccurrencesCount === 0
+                        ? 'No Available Dates'
+                        : `Confirm Series Reservation (${
+                            seriesPreviewData?.validOccurrencesCount ?? recurrenceCount
+                          } Dates)`}
+                    </span>
                   ) : (
                     <span>
                       {previewData?.requiresApproval

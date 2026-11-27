@@ -1,4 +1,6 @@
 import { BookingStatus, Role, PrismaClient } from '@prisma/client';
+import { getKolkataWeekRange } from '@/lib/timezone';
+import { QuotaResponse } from '@lpu/shared';
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -28,6 +30,8 @@ export interface EvaluatePolicyParams {
   startTime: Date;
   endTime: Date;
   prisma: any; // PrismaClient or TransactionClient
+  additionalWeeklyHours?: number;
+  seriesStartDate?: Date;
 }
 
 /**
@@ -38,31 +42,51 @@ export async function getWeeklyQuotaUsage({
   department,
   date,
   prisma,
+  additionalHours = 0,
 }: {
   user: { id: string; role: Role };
   department?: string;
-  date: Date;
+  date: Date | string;
   prisma: any;
-}): Promise<{ currentWeeklyHours: number; maxWeeklyHours: number; remainingWeeklyQuota: number }> {
+  additionalHours?: number;
+}): Promise<{
+  currentWeeklyHours: number;
+  maxWeeklyHours: number;
+  remainingWeeklyQuota: number;
+  weekStartStr: string;
+  weekEndStr: string;
+  weekStartUtc: Date;
+  weekEndUtc: Date;
+  policyName: string;
+}> {
   let maxWeeklyHours = 20;
+  let policyName = 'Default Campus Student Quota (20h/week)';
+
   if (department) {
     const policy = await prisma.departmentPolicy.findUnique({
       where: { department },
     });
     if (policy?.maxBookingHoursPerWeek) {
       maxWeeklyHours = policy.maxBookingHoursPerWeek;
+      policyName = `Department Quota: ${department} (${maxWeeklyHours}h/week)`;
     }
   }
+
+  const { weekStartStr, weekEndStr, weekStartUtc, weekEndUtc } = getKolkataWeekRange(date);
 
   if (user.role !== Role.STUDENT) {
     return {
       currentWeeklyHours: 0,
       maxWeeklyHours: 999,
       remainingWeeklyQuota: 999,
+      weekStartStr,
+      weekEndStr,
+      weekStartUtc,
+      weekEndUtc,
+      policyName: 'Unrestricted Quota (Faculty / Administrator)',
     };
   }
 
-  const { weekStart, weekEnd } = getWeekRange(date);
   const activeBookings = await prisma.booking.findMany({
     where: {
       userId: user.id,
@@ -72,9 +96,10 @@ export async function getWeeklyQuotaUsage({
           BookingStatus.APPROVED,
           BookingStatus.CONFIRMED,
           BookingStatus.CHECKED_IN,
+          BookingStatus.COMPLETED,
         ],
       },
-      startTime: { gte: weekStart, lte: weekEnd },
+      startTime: { gte: weekStartUtc, lte: weekEndUtc },
     },
     select: {
       startTime: true,
@@ -87,30 +112,55 @@ export async function getWeeklyQuotaUsage({
     currentWeeklyHours += (b.endTime.getTime() - b.startTime.getTime()) / (1000 * 60 * 60);
   }
 
+  currentWeeklyHours += additionalHours;
+
   const remainingWeeklyQuota = Math.max(0, parseFloat((maxWeeklyHours - currentWeeklyHours).toFixed(1)));
   return {
     currentWeeklyHours: parseFloat(currentWeeklyHours.toFixed(1)),
     maxWeeklyHours,
     remainingWeeklyQuota,
+    weekStartStr,
+    weekEndStr,
+    weekStartUtc,
+    weekEndUtc,
+    policyName,
   };
 }
 
 /**
- * Calculates start (Monday 00:00:00) and end (Sunday 23:59:59) of the calendar week for a given date in UTC.
+ * Returns complete quota response contract for GET /api/me/quota.
  */
-function getWeekRange(date: Date): { weekStart: Date; weekEnd: Date } {
-  const d = new Date(date);
-  const day = d.getUTCDay();
-  const diffToMonday = (day === 0 ? -6 : 1) - day;
-  const monday = new Date(d);
-  monday.setUTCDate(d.getUTCDate() + diffToMonday);
-  monday.setUTCHours(0, 0, 0, 0);
+export async function getAuthoritativeQuota({
+  user,
+  date,
+  prisma,
+}: {
+  user: { id: string; role: Role; department?: string };
+  date?: Date | string;
+  prisma: any;
+}): Promise<QuotaResponse> {
+  const targetDate = date || new Date();
+  const usage = await getWeeklyQuotaUsage({
+    user,
+    department: user.department,
+    date: targetDate,
+    prisma,
+  });
 
-  const sunday = new Date(monday);
-  sunday.setUTCDate(monday.getUTCDate() + 6);
-  sunday.setUTCHours(23, 59, 59, 999);
-
-  return { weekStart: monday, weekEnd: sunday };
+  return {
+    periodStart: usage.weekStartStr,
+    periodEnd: usage.weekEndStr,
+    currentWeeklyHours: usage.currentWeeklyHours,
+    remainingWeeklyQuota: usage.remainingWeeklyQuota,
+    maxWeeklyHours: usage.maxWeeklyHours,
+    role: user.role,
+    department: user.department || 'Campus Wide',
+    policyName: usage.policyName,
+    message:
+      user.role === Role.STUDENT
+        ? `${usage.remainingWeeklyQuota}h of ${usage.maxWeeklyHours}h remaining for the week of ${usage.weekStartStr} to ${usage.weekEndStr}.`
+        : 'Faculty and Administrator accounts have unrestricted weekly reservation quota.',
+  };
 }
 
 /**
@@ -122,6 +172,8 @@ export async function evaluateBookingPolicy({
   startTime,
   endTime,
   prisma,
+  additionalWeeklyHours = 0,
+  seriesStartDate,
 }: EvaluatePolicyParams): Promise<PolicyDecision> {
   // 1. Fetch Department Policy
   const policy = await prisma.departmentPolicy.findUnique({
@@ -141,6 +193,7 @@ export async function evaluateBookingPolicy({
     department: resource.department,
     date: startTime,
     prisma,
+    additionalHours: additionalWeeklyHours,
   });
 
   // 2. Blackout Periods Validation
@@ -174,11 +227,13 @@ export async function evaluateBookingPolicy({
   }
 
   // 3. Maximum Advance Booking Days Validation
+  // For recurring series, validate that the series starts within the advance booking window
+  const checkDate = seriesStartDate || startTime;
   const maxFutureDate = new Date();
   maxFutureDate.setDate(maxFutureDate.getDate() + maxAdvanceDays);
   maxFutureDate.setHours(23, 59, 59, 999);
 
-  if (startTime > maxFutureDate) {
+  if (checkDate > maxFutureDate) {
     return {
       allowed: false,
       requiresApproval: true,

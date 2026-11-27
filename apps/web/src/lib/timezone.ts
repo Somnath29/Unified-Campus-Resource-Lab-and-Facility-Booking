@@ -282,4 +282,63 @@ export function formatSlotTimeRange(startTime: string, endTime: string): string 
   return `${formatSlotTime12Hour(startTime)} - ${formatSlotTime12Hour(endTime)}`;
 }
 
+/**
+ * Weekday enum / string mappings to day-of-week integer (0=Sunday ... 6=Saturday)
+ */
+export const WEEKDAY_TO_INT: Record<string, number> = {
+  SUNDAY: 0,
+  MONDAY: 1,
+  TUESDAY: 2,
+  WEDNESDAY: 3,
+  THURSDAY: 4,
+  FRIDAY: 5,
+  SATURDAY: 6,
+};
+
+export const INT_TO_WEEKDAY: Record<number, string> = {
+  0: 'SUNDAY',
+  1: 'MONDAY',
+  2: 'TUESDAY',
+  3: 'WEDNESDAY',
+  4: 'THURSDAY',
+  5: 'FRIDAY',
+  6: 'SATURDAY',
+};
+
+/**
+ * Computes calendar week start (Monday 00:00:00 IST) and end (Sunday 23:59:59.999 IST) in Asia/Kolkata.
+ */
+export function getKolkataWeekRange(dateInput: Date | string): {
+  weekStartStr: string; // YYYY-MM-DD
+  weekEndStr: string;   // YYYY-MM-DD
+  weekStartUtc: Date;
+  weekEndUtc: Date;
+} {
+  let dateStr: string;
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+    dateStr = dateInput;
+  } else {
+    dateStr = getDateStringInKolkata(dateInput instanceof Date ? dateInput : new Date(dateInput));
+  }
+
+  const noonUtc = kolkataToUtc(dateStr, '12:00');
+  const dayOfWeek = getDayOfWeekInKolkata(noonUtc); // 0=Sun, 1=Mon, ..., 6=Sat
+
+  // Days since Monday (Monday = 0, Tuesday = 1, ..., Sunday = 6)
+  const daysSinceMonday = (dayOfWeek + 6) % 7;
+  const weekStartStr = addDaysKolkata(dateStr, -daysSinceMonday);
+  const weekEndStr = addDaysKolkata(weekStartStr, 6);
+
+  const weekStartUtc = kolkataToUtc(weekStartStr, '00:00');
+  const nextMondayUtc = kolkataToUtc(addDaysKolkata(weekEndStr, 1), '00:00');
+  const weekEndUtc = new Date(nextMondayUtc.getTime() - 1); // 23:59:59.999 IST
+
+  return {
+    weekStartStr,
+    weekEndStr,
+    weekStartUtc,
+    weekEndUtc,
+  };
+}
+
 
