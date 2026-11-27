@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { BookingStatus, ActivityType, PriorityLevel, Role, Prisma } from '@prisma/client';
 import { ApiError } from '@/lib/auth';
+export { ApiError };
 import env from '@/config/env';
 import {
   validateOperatingHours,
@@ -50,6 +51,8 @@ export interface CreateBookingOptions {
   user: BookingUserContext;
   input: CreateBookingInput;
   idempotencyKey?: string | null;
+  tx?: Prisma.TransactionClient;
+  waitlistEntryId?: string | null;
 }
 
 export interface CreateBookingResult {
@@ -211,11 +214,8 @@ export class BookingService {
    * Creates a new campus resource booking with full policy evaluation,
    * timetable conflict checks, idempotency, and double-booking concurrency safety.
    */
-  static async createBooking({
-    user,
-    input,
-    idempotencyKey,
-  }: CreateBookingOptions): Promise<CreateBookingResult> {
+  static async createBooking(options: CreateBookingOptions): Promise<CreateBookingResult> {
+    const { user, input, idempotencyKey, tx: externalTx, waitlistEntryId } = options;
     const start = new Date(input.startTime);
     const end = new Date(input.endTime);
 
@@ -345,124 +345,136 @@ export class BookingService {
 
     // 7. Atomic Database Transaction with Exclusion Constraint Handling
     try {
-      const result = await prisma.$transaction(
-        async (tx) => {
-          // Double-check application-level overlapping bookings inside transaction
-          const overlapping = await tx.booking.findFirst({
-            where: {
-              resourceId: input.resourceId,
-              status: {
-                in: [
-                  BookingStatus.PENDING,
-                  BookingStatus.APPROVED,
-                  BookingStatus.CONFIRMED,
-                  BookingStatus.CHECKED_IN,
-                ],
-              },
-              AND: [
-                { startTime: { lt: end } },
-                { endTime: { gt: start } },
+      const txFn = async (tx: Prisma.TransactionClient) => {
+        // Double-check application-level overlapping bookings inside transaction
+        const overlapping = await tx.booking.findFirst({
+          where: {
+            resourceId: input.resourceId,
+            status: {
+              in: [
+                BookingStatus.PENDING,
+                BookingStatus.APPROVED,
+                BookingStatus.CONFIRMED,
+                BookingStatus.CHECKED_IN,
               ],
             },
-          });
+            AND: [
+              { startTime: { lt: end } },
+              { endTime: { gt: start } },
+            ],
+          },
+        });
 
-          if (overlapping) {
-            if (idempotencyKey) {
-              const existingKey = await tx.idempotencyKey.findUnique({
-                where: {
-                  userId_key: {
-                    userId: user.id,
-                    key: idempotencyKey,
-                  },
-                },
-              });
-              if (existingKey) {
-                const cached = JSON.parse(existingKey.responseBody);
-                return {
-                  booking: cached.booking,
-                  message: cached.message,
-                  isIdempotentReplay: true,
-                };
-              }
-            }
-
-            throw new ApiError(
-              409,
-              `Slot conflict: The selected resource is already booked or reserved during this time window. (Conflicting slot: ${overlapping.startTime.toISOString()} to ${overlapping.endTime.toISOString()})`,
-              { conflictingBookingId: overlapping.id }
-            );
-          }
-
-          // Generate sequential booking number & 6-digit cryptographically secure PIN
-          const bookingNumber = await getNextBookingNumber(tx);
-          const checkInToken = await generateUniqueCheckInPin(tx);
-
-          const newBooking = await tx.booking.create({
-            data: {
-              bookingNumber,
-              userId: user.id,
-              resourceId: input.resourceId,
-              startTime: start,
-              endTime: end,
-              purpose: input.purpose.trim(),
-              activityType: input.activityType || ActivityType.PROJECT_WORK,
-              expectedAttendance,
-              priority: input.priority || PriorityLevel.NORMAL,
-              status: initialStatus,
-              checkInToken,
-              releaseDeadline,
-              departmentId: resource.department,
-            },
-            include: {
-              resource: true,
-            },
-          });
-
-          // Record Audit Log inside the transaction
-          await tx.auditLog.create({
-            data: {
-              action: 'BOOKING_CREATED',
-              userId: user.id,
-              entityType: 'Booking',
-              entityId: newBooking.id,
-              details: JSON.stringify({
-                bookingNumber: newBooking.bookingNumber,
-                status: newBooking.status,
-                startTime: newBooking.startTime,
-                endTime: newBooking.endTime,
-              }),
-            },
-          });
-
-          const responsePayload = {
-            booking: newBooking,
-            message:
-              initialStatus === BookingStatus.CONFIRMED
-                ? 'Booking successfully confirmed!'
-                : 'Booking request submitted for department approval.',
-          };
-
-          // Persist Idempotency Record atomically inside the same transaction
+        if (overlapping) {
           if (idempotencyKey) {
-            await tx.idempotencyKey.create({
-              data: {
-                key: idempotencyKey,
-                userId: user.id,
-                requestHash,
-                statusCode: 201,
-                responseBody: JSON.stringify(responsePayload),
-                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+            const existingKey = await tx.idempotencyKey.findUnique({
+              where: {
+                userId_key: {
+                  userId: user.id,
+                  key: idempotencyKey,
+                },
               },
             });
+            if (existingKey) {
+              const cached = JSON.parse(existingKey.responseBody);
+              return {
+                booking: cached.booking,
+                message: cached.message,
+                isIdempotentReplay: true,
+              };
+            }
           }
 
-          return responsePayload;
-        },
-        {
-          maxWait: 15000,
-          timeout: 30000,
+          throw new ApiError(
+            409,
+            `Slot conflict: The selected resource is already booked or reserved during this time window. (Conflicting slot: ${overlapping.startTime.toISOString()} to ${overlapping.endTime.toISOString()})`,
+            { conflictingBookingId: overlapping.id }
+          );
         }
-      );
+
+        // Generate sequential booking number & 6-digit cryptographically secure PIN
+        const bookingNumber = await getNextBookingNumber(tx);
+        const checkInToken = await generateUniqueCheckInPin(tx);
+
+        const newBooking = await tx.booking.create({
+          data: {
+            bookingNumber,
+            userId: user.id,
+            resourceId: input.resourceId,
+            startTime: start,
+            endTime: end,
+            purpose: input.purpose.trim(),
+            activityType: input.activityType || ActivityType.PROJECT_WORK,
+            expectedAttendance,
+            priority: input.priority || PriorityLevel.NORMAL,
+            status: initialStatus,
+            checkInToken,
+            releaseDeadline,
+            departmentId: resource.department,
+          },
+          include: {
+            resource: true,
+          },
+        });
+
+        // Fulfill waitlist entry atomically if linked
+        if (waitlistEntryId) {
+          await tx.waitlistEntry.update({
+            where: { id: waitlistEntryId },
+            data: {
+              status: 'FULFILLED',
+              bookingId: newBooking.id,
+            },
+          });
+        }
+
+        // Record Audit Log inside the transaction
+        await tx.auditLog.create({
+          data: {
+            action: 'BOOKING_CREATED',
+            userId: user.id,
+            entityType: 'Booking',
+            entityId: newBooking.id,
+            details: JSON.stringify({
+              bookingNumber: newBooking.bookingNumber,
+              status: newBooking.status,
+              startTime: newBooking.startTime,
+              endTime: newBooking.endTime,
+            }),
+          },
+        });
+
+        const responsePayload = {
+          booking: newBooking,
+          message:
+            initialStatus === BookingStatus.CONFIRMED
+              ? 'Booking successfully confirmed!'
+              : 'Booking request submitted for department approval.',
+        };
+
+        // Persist Idempotency Record atomically inside the same transaction
+        if (idempotencyKey) {
+          await tx.idempotencyKey.create({
+            data: {
+              key: idempotencyKey,
+              userId: user.id,
+              requestHash,
+              statusCode: 201,
+              responseBody: JSON.stringify(responsePayload),
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+            },
+          });
+        }
+
+        return responsePayload;
+      };
+
+      const result = externalTx
+        ? await txFn(externalTx)
+        : await prisma.$transaction(txFn, {
+            maxWait: 15000,
+            timeout: 30000,
+          });
 
       // 8. Notifications (outside critical transaction path)
       try {
@@ -804,6 +816,18 @@ export class BookingService {
       });
     } catch {
       // Non-fatal
+    }
+
+    // Automatically trigger waitlist offer for the released slot
+    try {
+      const { WaitlistService } = await import('@/services/waitlistService');
+      await WaitlistService.triggerSlotOffer({
+        resourceId: booking.resourceId,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+      });
+    } catch (err) {
+      console.error('[Waitlist trigger error on cancelBooking]', err);
     }
 
     return updated;
@@ -1570,7 +1594,7 @@ export class BookingService {
     }
 
     // Fetch tab counts in parallel
-    const [upcomingCount, pendingCount, pastCount, cancelledCount, total, items] =
+    const [upcomingCount, pendingCount, pastCount, cancelledCount, waitlistCount, total, items] =
       await Promise.all([
         prisma.booking.count({
           where: {
@@ -1602,6 +1626,12 @@ export class BookingService {
           where: {
             userId: user.id,
             status: { in: [BookingStatus.CANCELLED, BookingStatus.REJECTED] },
+          },
+        }),
+        prisma.waitlistEntry.count({
+          where: {
+            userId: user.id,
+            status: { in: ['WAITING', 'OFFERED'] },
           },
         }),
         prisma.booking.count({ where: whereCondition }),
@@ -1675,6 +1705,7 @@ export class BookingService {
         pending: pendingCount,
         past: pastCount,
         cancelled: cancelledCount,
+        waitlist: waitlistCount,
       },
     };
   }

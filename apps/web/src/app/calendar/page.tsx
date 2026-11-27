@@ -43,6 +43,7 @@ import {
   formatSlotTime12Hour,
   formatSlotTimeRange,
   isValidDateString,
+  kolkataToUtc,
 } from '@/lib/timezone';
 
 function CalendarContent() {
@@ -75,6 +76,10 @@ function CalendarContent() {
     startTime: string;
     endTime: string;
   } | null>(null);
+
+  // Waitlist state
+  const [waitlistSuccessMessage, setWaitlistSuccessMessage] = useState<string | null>(null);
+  const [isWaitlistJoining, setIsWaitlistJoining] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -213,6 +218,30 @@ function CalendarContent() {
     setIsBookingModalOpen(true);
   };
 
+  // Join waitlist for an occupied/booked slot
+  const handleJoinWaitlist = async (slot: AvailabilitySlot) => {
+    if (!selectedResourceId || slot.status !== 'booked') return;
+    setIsWaitlistJoining(true);
+    setWaitlistSuccessMessage(null);
+    try {
+      const startUtc = kolkataToUtc(selectedDate, slot.startTime);
+      const endUtc = kolkataToUtc(selectedDate, slot.endTime);
+      const res = await api.waitlist.join({
+        resourceId: selectedResourceId,
+        startTime: startUtc.toISOString(),
+        endTime: endUtc.toISOString(),
+      });
+      setWaitlistSuccessMessage(
+        `Successfully joined waitlist for ${currentResource?.name || 'resource'} (${formatSlotTimeRange(slot.startTime, slot.endTime)})! You are #${res.queuePosition} in line.`
+      );
+      setTimeout(() => setWaitlistSuccessMessage(null), 6000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to join waitlist. Please check slot availability.');
+    } finally {
+      setIsWaitlistJoining(false);
+    }
+  };
+
   // Helper to render slot badge & actions
   const renderSlotStatus = (slot: AvailabilitySlot) => {
     switch (slot.status) {
@@ -237,14 +266,26 @@ function CalendarContent() {
 
       case 'booked':
         return (
-          <div className="flex items-center gap-2 text-xs font-bold text-orange-950">
-            <Lock className="w-4 h-4 text-[#F58220] shrink-0" />
-            <div>
-              <span>Reserved</span>
-              <span className="text-[10px] text-gray-500 font-normal block">
-                {slot.reason || 'Booked for an approved event'}
-              </span>
+          <div className="flex items-center justify-between gap-2 w-full">
+            <div className="flex items-center gap-2 text-xs font-bold text-orange-950">
+              <Lock className="w-4 h-4 text-[#F58220] shrink-0" />
+              <div>
+                <span>Reserved</span>
+                <span className="text-[10px] text-gray-500 font-normal block">
+                  {slot.reason || 'Booked for an approved event'}
+                </span>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => handleJoinWaitlist(slot)}
+              disabled={isWaitlistJoining}
+              aria-label={`Join waitlist for slot ${formatSlotTimeRange(slot.startTime, slot.endTime)}`}
+              className="px-2.5 py-1 bg-amber-500/10 hover:bg-[#F58220] text-[#F58220] hover:text-white border border-[#F58220]/30 hover:border-[#F58220] text-xs font-bold rounded-xl transition flex items-center gap-1 shrink-0 disabled:opacity-50"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Join Waitlist</span>
+            </button>
           </div>
         );
 
@@ -373,6 +414,19 @@ function CalendarContent() {
               )}
             </div>
           </div>
+
+          {/* Waitlist Success Banner */}
+          {waitlistSuccessMessage && (
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between text-xs font-semibold animate-in fade-in shadow-sm">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{waitlistSuccessMessage}</span>
+              </div>
+              <Link href="/my-bookings?tab=WAITLIST" className="underline font-bold hover:text-emerald-950 ml-2 shrink-0">
+                View Waitlist →
+              </Link>
+            </div>
+          )}
 
           {/* Control Bar: Resource Selector + Date Navigation */}
           <div className="bg-white p-4 sm:p-5 rounded-2xl border border-gray-100 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">

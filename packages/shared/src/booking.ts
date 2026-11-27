@@ -272,7 +272,7 @@ export interface QuotaResponse {
 
 export type BookingLifecycleAction = 'RESCHEDULE' | 'CANCEL' | 'EXTEND' | 'END_EARLY' | 'SHOW_QR';
 
-export type MyBookingsTab = 'UPCOMING' | 'PENDING' | 'PAST' | 'CANCELLED';
+export type MyBookingsTab = 'UPCOMING' | 'PENDING' | 'PAST' | 'CANCELLED' | 'WAITLIST';
 
 export interface BookingActionEligibility {
   canReschedule: boolean;
@@ -318,6 +318,7 @@ export interface MyBookingsResponse {
     pending: number;
     past: number;
     cancelled: number;
+    waitlist?: number;
   };
 }
 
@@ -392,4 +393,90 @@ export interface LifecycleErrorResponse {
   error: string;
   details?: any;
   alternativeSlots?: AlternativeSlot[];
+}
+
+// ----------------------------------------------------
+// R7: Waitlist Management Contracts
+// ----------------------------------------------------
+
+export type WaitlistStatus = 'WAITING' | 'OFFERED' | 'EXPIRED' | 'FULFILLED' | 'WITHDRAWN';
+
+export interface WaitlistEntryDTO {
+  id: string;
+  userId: string;
+  resourceId: string;
+  startTime: string;
+  endTime: string;
+  priority: number;
+  status: WaitlistStatus;
+  offeredAt?: string | null;
+  offerExpiresAt?: string | null;
+  bookingId?: string | null;
+  withdrawnAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resource?: {
+    id: string;
+    name: string;
+    code: string;
+    building: string;
+    floor?: string | null;
+    capacity: number;
+    imageUrl?: string | null;
+    operatingHours?: string;
+  };
+  queuePosition?: number | null;
+  isOfferActive?: boolean;
+  offerRemainingSeconds?: number | null;
+}
+
+export interface JoinWaitlistRequest {
+  resourceId: string;
+  startTime: string;
+  endTime: string;
+}
+
+export interface JoinWaitlistResponse {
+  entry: WaitlistEntryDTO;
+  queuePosition: number;
+  message: string;
+}
+
+export interface WaitlistQuery {
+  status?: WaitlistStatus;
+  page?: number;
+  limit?: number;
+}
+
+export interface WaitlistListResponse {
+  entries: WaitlistEntryDTO[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
+  activeOfferCount: number;
+}
+
+export interface AcceptOfferResponse {
+  booking: BookingListItemDTO;
+  waitlistEntry: WaitlistEntryDTO;
+  message: string;
+}
+
+export interface LeaveWaitlistResponse {
+  waitlistEntry: WaitlistEntryDTO;
+  promotedNextUser: boolean;
+  message: string;
+}
+
+export interface WaitlistExpiryJobResponse {
+  processed: number;
+  expired: number;
+  promoted: number;
+  errors?: { id: string; error: string }[];
+  message: string;
 }

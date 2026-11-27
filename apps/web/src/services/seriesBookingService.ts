@@ -1025,6 +1025,20 @@ export class SeriesBookingService {
           });
         }
       });
+
+      // Trigger waitlist offers for each released occurrence independently
+      try {
+        const { WaitlistService } = await import('@/services/waitlistService');
+        for (const b of cancellableBookings) {
+          await WaitlistService.triggerSlotOffer({
+            resourceId: b.resourceId,
+            startTime: b.startTime,
+            endTime: b.endTime,
+          });
+        }
+      } catch (err) {
+        console.error('[Waitlist trigger error on cancelSeriesBookings]', err);
+      }
     }
 
     return {

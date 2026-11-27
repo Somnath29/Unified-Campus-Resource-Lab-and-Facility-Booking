@@ -54,6 +54,18 @@ export async function processAutoRelease(): Promise<AutoReleaseResult> {
     });
 
     releasedList.push(b.bookingNumber);
+
+    // Trigger waitlist offer for the released slot
+    try {
+      const { WaitlistService } = await import('@/services/waitlistService');
+      await WaitlistService.triggerSlotOffer({
+        resourceId: b.resourceId,
+        startTime: b.startTime,
+        endTime: b.endTime,
+      });
+    } catch (err) {
+      console.error('[Waitlist trigger error on autoRelease]', err);
+    }
   }
 
   return {

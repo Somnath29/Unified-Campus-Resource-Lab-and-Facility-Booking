@@ -93,6 +93,18 @@ export const POST = withErrorHandling(
         },
       });
 
+      // Trigger waitlist offer for the released slot
+      try {
+        const { WaitlistService } = await import('@/services/waitlistService');
+        await WaitlistService.triggerSlotOffer({
+          resourceId: booking.resourceId,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+        });
+      } catch (err) {
+        console.error('[Waitlist trigger error on approval REJECT]', err);
+      }
+
       return ok({
         booking: updated,
         message: 'Booking request rejected.',

@@ -166,6 +166,29 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+  waitlist: {
+    join: (body: import('@lpu/shared').JoinWaitlistRequest) =>
+      apiRequest<import('@lpu/shared').JoinWaitlistResponse>('/waitlist', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    list: (query?: import('@lpu/shared').WaitlistQuery) => {
+      const params = new URLSearchParams();
+      if (query?.status) params.set('status', query.status);
+      if (query?.page) params.set('page', query.page.toString());
+      if (query?.limit) params.set('limit', query.limit.toString());
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      return apiRequest<import('@lpu/shared').WaitlistListResponse>(`/waitlist${qs}`);
+    },
+    leave: (id: string) =>
+      apiRequest<import('@lpu/shared').LeaveWaitlistResponse>(`/waitlist/${id}`, {
+        method: 'DELETE',
+      }),
+    accept: (id: string) =>
+      apiRequest<import('@lpu/shared').AcceptOfferResponse>(`/waitlist/${id}/accept`, {
+        method: 'POST',
+      }),
+  },
   me: {
     quota: (date?: string) => {
       const qs = date ? `?date=${encodeURIComponent(date)}` : '';

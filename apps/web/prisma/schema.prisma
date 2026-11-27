@@ -58,6 +58,14 @@ enum RecurrenceFrequency {
   WEEKLY
 }
 
+enum WaitlistStatus {
+  WAITING
+  OFFERED
+  EXPIRED
+  FULFILLED
+  WITHDRAWN
+}
+
 model User {
   id                String         @id @default(uuid())
   email             String         @unique
@@ -73,6 +81,7 @@ model User {
   passwordChangedAt DateTime?
   bookings          Booking[]
   bookingSeries     BookingSeries[]
+  waitlistEntries   WaitlistEntry[]
   notifications     Notification[]
   auditLogs         AuditLog[]
   idempotencyKeys   IdempotencyKey[]
@@ -99,6 +108,7 @@ model Resource {
   deletedAt          DateTime?
   bookings           Booking[]
   bookingSeries      BookingSeries[]
+  waitlistEntries    WaitlistEntry[]
   timetableEntries   TimetableEntry[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
@@ -151,6 +161,7 @@ model Booking {
   checkInToken       String?        @unique
   checkedInAt        DateTime?
   actualEndTime      DateTime?
+  waitlistEntry      WaitlistEntry?
   releaseDeadline    DateTime?
   approvalNotes      String?
   rejectionReason    String?
@@ -236,5 +247,30 @@ model IdempotencyKey {
 
   @@unique([userId, key])
   @@index([expiresAt])
+}
+
+model WaitlistEntry {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId      String
+  resource        Resource       @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  startTime       DateTime
+  endTime         DateTime
+  priority        Int            @default(0)
+  status          WaitlistStatus @default(WAITING)
+  offeredAt       DateTime?
+  offerExpiresAt  DateTime?
+  bookingId       String?        @unique
+  booking         Booking?       @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  withdrawnAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([resourceId, startTime, endTime])
+  @@index([status, createdAt])
+  @@index([offerExpiresAt])
+  @@index([userId, createdAt])
+  @@index([bookingId])
 }
 
