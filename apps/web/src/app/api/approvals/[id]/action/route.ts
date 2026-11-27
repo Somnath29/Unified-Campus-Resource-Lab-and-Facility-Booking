@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { ok, fail, withErrorHandling } from '@/lib/api-response';
 import { requireRole } from '@/lib/auth';
 import { BookingStatus, Role } from '@prisma/client';
+import { generateSecurePin, hashPin } from '@/lib/checkin-crypto';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +24,7 @@ export const POST = withErrorHandling(
     }
 
     if (action === 'APPROVE') {
-      const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
+      const checkInToken = generateSecurePin();
       const releaseDeadline = new Date(booking.startTime.getTime() + 15 * 60000);
 
       const updated = await prisma.booking.update({
@@ -32,6 +33,7 @@ export const POST = withErrorHandling(
           status: BookingStatus.CONFIRMED,
           approvalNotes: notes || `Approved by ${approver.name} (${approver.designation || approver.role})`,
           checkInToken,
+          checkInPinHash: hashPin(checkInToken),
           releaseDeadline,
         },
       });
@@ -117,7 +119,7 @@ export const POST = withErrorHandling(
       const updatedStart = newStartTime ? new Date(newStartTime) : booking.startTime;
       const updatedEnd = newEndTime ? new Date(newEndTime) : booking.endTime;
 
-      const checkInToken = Math.floor(100000 + Math.random() * 900000).toString();
+      const checkInToken = generateSecurePin();
       const releaseDeadline = new Date(updatedStart.getTime() + 15 * 60000);
 
       const updated = await prisma.booking.update({
@@ -129,6 +131,7 @@ export const POST = withErrorHandling(
           status: BookingStatus.CONFIRMED,
           approvalNotes: notes || `Modified and approved by ${approver.name}. Assigned to ${newResource?.name}.`,
           checkInToken,
+          checkInPinHash: hashPin(checkInToken),
           releaseDeadline,
         },
       });

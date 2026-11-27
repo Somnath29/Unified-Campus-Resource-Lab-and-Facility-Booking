@@ -66,6 +66,13 @@ enum WaitlistStatus {
   WITHDRAWN
 }
 
+enum CheckInMethod {
+  QR_TOKEN
+  PIN
+  APPROVER_OVERRIDE
+  ADMIN_OVERRIDE
+}
+
 model User {
   id                String         @id @default(uuid())
   email             String         @unique
@@ -104,8 +111,11 @@ model Resource {
   isAvailableNow     Boolean          @default(true)
   isUnderMaintenance Boolean          @default(false)
   maintenanceReason  String?
-  operatingHours     String           @default("08:00 AM - 08:00 PM")
-  deletedAt          DateTime?
+  operatingHours          String           @default("08:00 AM - 08:00 PM")
+  checkInSecretEncrypted  String?
+  checkInSecretVersion    Int              @default(1)
+  checkInSecretRotatedAt  DateTime?
+  deletedAt               DateTime?
   bookings           Booking[]
   bookingSeries      BookingSeries[]
   waitlistEntries    WaitlistEntry[]
@@ -158,9 +168,18 @@ model Booking {
   expectedAttendance Int            @default(1)
   priority           PriorityLevel  @default(NORMAL)
   status             BookingStatus  @default(PENDING)
-  checkInToken       String?        @unique
-  checkedInAt        DateTime?
-  actualEndTime      DateTime?
+  checkInToken            String?        @unique
+  checkInPinHash          String?
+  checkedInAt             DateTime?
+  checkInMethod           CheckInMethod?
+  checkedInById           String?
+  checkInOverrideReason   String?
+  venueVerified           Boolean        @default(false)
+  checkInTokenJti         String?
+  activeCheckInTokenJti   String?
+  pinFailedAttempts       Int            @default(0)
+  pinLockedUntil          DateTime?
+  actualEndTime           DateTime?
   waitlistEntry      WaitlistEntry?
   releaseDeadline    DateTime?
   approvalNotes      String?
@@ -272,5 +291,27 @@ model WaitlistEntry {
   @@index([offerExpiresAt])
   @@index([userId, createdAt])
   @@index([bookingId])
+}
+
+model ConsumedCheckInToken {
+  id         String   @id @default(uuid())
+  jti        String   @unique
+  bookingId  String
+  userId     String
+  resourceId String
+  expiresAt  DateTime
+  consumedAt DateTime @default(now())
+
+  @@index([bookingId])
+  @@index([expiresAt])
+}
+
+model RateLimitBucket {
+  key         String   @id
+  count       Int      @default(1)
+  windowStart DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }
 

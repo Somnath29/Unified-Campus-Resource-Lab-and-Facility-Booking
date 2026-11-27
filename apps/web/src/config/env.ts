@@ -5,6 +5,12 @@ const envSchema = z.object({
   DIRECT_URL: z.string().min(1, 'DIRECT_URL is required for migrations'),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long'),
   JWT_EXPIRES_IN: z.string().default('7d'),
+  CHECKIN_TOKEN_SECRET: z
+    .string()
+    .min(32, 'CHECKIN_TOKEN_SECRET must be at least 32 characters long'),
+  RESOURCE_SECRET_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, 'RESOURCE_SECRET_ENCRYPTION_KEY must be a 64-char hex string (32 bytes for AES-256-GCM)'),
   CRON_SECRET: z.string().min(1, 'CRON_SECRET is required'),
   ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173,http://localhost:5174'),
   ENABLE_DEMO_LOGIN: z

@@ -35,6 +35,7 @@ export const GET = withErrorHandling(
       return fail(404, 'Resource not found.');
     }
 
-    return ok({ resource });
+    const { checkInSecretEncrypted: _omit, ...safeResource } = resource;
+    return ok({ resource: safeResource });
   }
 );

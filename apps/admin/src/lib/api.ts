@@ -82,6 +82,12 @@ export const adminApi = {
       adminApiRequest(`/admin/resources/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     delete: (id: string) =>
       adminApiRequest(`/admin/resources/${id}`, { method: 'DELETE' }),
+    getRoomQr: (id: string) =>
+      adminApiRequest<{ roomQr: import('@lpu/shared').ResourceRoomQrDTO }>(`/admin/resources/${id}/room-qr`),
+    rotateRoomQr: (id: string) =>
+      adminApiRequest<import('@lpu/shared').RotateResourceQrResponse>(`/admin/resources/${id}/room-qr`, {
+        method: 'POST',
+      }),
   },
   users: {
     list: () => adminApiRequest('/admin/users'),

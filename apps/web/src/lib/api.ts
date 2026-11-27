@@ -44,6 +44,13 @@ export async function apiRequest<T = any>(
   if (!response.ok) {
     const error: any = new Error(data.error || data.message || `Request failed with status ${response.status}`);
     error.status = response.status;
+    error.code = data.code;
+    error.remainingAttempts = data.remainingAttempts;
+    error.lockedUntil = data.lockedUntil;
+    error.retryAfterSeconds = data.retryAfterSeconds;
+    error.availableFrom = data.availableFrom;
+    error.releaseDeadline = data.releaseDeadline;
+    error.canOverride = data.canOverride;
     error.data = data;
     throw error;
   }
@@ -203,7 +210,17 @@ export const api = {
     takeAction: (id: string, body: any) => apiRequest(`/approvals/${id}/action`, { method: 'POST', body: JSON.stringify(body) }),
   },
   checkin: {
-    verify: (body: { token?: string; bookingId?: string }) => apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),
+    generateToken: (bookingId: string) =>
+      apiRequest<import('@lpu/shared').CheckInTokenResponse>(`/bookings/${bookingId}/check-in-token`, {
+        method: 'POST',
+      }),
+    checkIn: (bookingId: string, body: import('@lpu/shared').CheckInRequest) =>
+      apiRequest<import('@lpu/shared').CheckInSuccessResponse>(`/bookings/${bookingId}/check-in`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    verify: (body: { token?: string; bookingId?: string; venueQr?: string; pin?: string; override?: any }) =>
+      apiRequest('/checkin/verify', { method: 'POST', body: JSON.stringify(body) }),
   },
   notifications: {
     list: () => apiRequest('/notifications'),

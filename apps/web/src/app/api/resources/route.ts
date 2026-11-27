@@ -296,8 +296,10 @@ export const GET = withErrorHandling(async (request: Request) => {
     hasPrevPage,
   };
 
+  const safeResources = resources.map(({ checkInSecretEncrypted: _omit, ...rest }) => rest);
+
   return ok({
-    resources,
+    resources: safeResources,
     pagination,
   });
 });

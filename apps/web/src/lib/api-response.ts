@@ -13,7 +13,23 @@ export function created<T>(data: T, init?: ResponseInit): NextResponse {
 }
 
 export function fail(status: number, message: string, details?: any): NextResponse {
-  const body: { error: string; details?: any } = { error: message };
+  const body: Record<string, any> = { error: message };
+  if (details && typeof details === 'object' && !Array.isArray(details)) {
+    const safePublicKeys = [
+      'code',
+      'retryAfterSeconds',
+      'lockedUntil',
+      'remainingAttempts',
+      'availableFrom',
+      'releaseDeadline',
+      'canOverride',
+    ];
+    for (const key of safePublicKeys) {
+      if (details[key] !== undefined) {
+        body[key] = details[key];
+      }
+    }
+  }
   if (details !== undefined && process.env.NODE_ENV !== 'production') {
     body.details = details;
   }

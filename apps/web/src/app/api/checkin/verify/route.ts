@@ -1,95 +1,38 @@
-import { prisma } from '@/lib/prisma';
 import { ok, fail, withErrorHandling } from '@/lib/api-response';
 import { requireAuth } from '@/lib/auth';
-import { BookingStatus, Prisma } from '@prisma/client';
+import { CheckInService } from '@/services/checkInService';
+import { getClientIp } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * Legacy /api/checkin/verify endpoint hardened to delegate directly to CheckInService.
+ * Accepts { bookingId, bookingToken?, token?, pin?, venueQr?, override? }.
+ */
 export const POST = withErrorHandling(async (request: Request) => {
   const user = await requireAuth(request);
   const body = await request.json().catch(() => ({}));
-  const { token, bookingId } = body;
 
-  if (!token && !bookingId) {
-    return fail(400, 'Please provide a valid QR check-in token or booking ID.');
+  const bookingId = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
+  if (!bookingId) {
+    return fail(400, 'Booking ID is required for check-in verification.');
   }
 
-  const where: Prisma.BookingWhereInput = {};
-  if (token) where.checkInToken = String(token).trim();
-  if (bookingId) where.id = String(bookingId);
+  const rawToken = typeof body.bookingToken === 'string' ? body.bookingToken : body.token;
+  const isSixDigitPin = typeof rawToken === 'string' && /^\d{6}$/.test(rawToken.trim());
 
-  const booking = await prisma.booking.findFirst({
-    where,
-    include: { resource: true, user: true },
-  });
-
-  if (!booking) {
-    return fail(404, 'No matching reservation found for this verification code.');
-  }
-
-  if (booking.status === BookingStatus.CHECKED_IN) {
-    return ok({
-      message: 'This reservation is already checked-in.',
-      booking,
-    });
-  }
-
-  if (booking.status === BookingStatus.NO_SHOW) {
-    return fail(
-      400,
-      'This reservation has been marked as NO-SHOW and released due to elapsed check-in window.'
-    );
-  }
-
-  if (booking.status === BookingStatus.CANCELLED || booking.status === BookingStatus.REJECTED) {
-    return fail(400, `Cannot check in to a booking with status ${booking.status}.`);
-  }
-
-  const now = new Date();
-  const earliestCheckIn = new Date(booking.startTime.getTime() - 30 * 60000);
-
-  if (now < earliestCheckIn) {
-    return fail(
-      400,
-      `Check-in opens 30 minutes prior to reservation start time (${booking.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).`
-    );
-  }
-
-  const updated = await prisma.booking.update({
-    where: { id: booking.id },
-    data: {
-      status: BookingStatus.CHECKED_IN,
-      checkedInAt: now,
+  const result = await CheckInService.verifyAndCheckIn({
+    bookingId,
+    actor: user,
+    input: {
+      bookingToken: !isSixDigitPin && rawToken ? String(rawToken) : undefined,
+      pin: body.pin ? String(body.pin) : isSixDigitPin ? String(rawToken).trim() : undefined,
+      venueQr: typeof body.venueQr === 'string' ? body.venueQr : undefined,
+      override: body.override,
     },
-    include: { resource: true, user: true },
+    clientIp: getClientIp(request),
   });
 
-  // Notify user
-  await prisma.notification.create({
-    data: {
-      userId: booking.userId,
-      title: `Check-in Verified: ${booking.resource.name}`,
-      message: `Welcome! Your check-in for ${booking.resource.name} is confirmed at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
-      type: 'CHECKIN',
-      link: '/my-bookings',
-    },
-  });
-
-  // Audit log
-  await prisma.auditLog.create({
-    data: {
-      action: 'CHECKIN_COMPLETED',
-      userId: user.id,
-      entityType: 'Booking',
-      entityId: booking.id,
-      details: `Verified check-in for ${booking.resource.name} via ${token ? 'Token' : 'Direct'} verification`,
-    },
-  });
-
-  return ok({
-    success: true,
-    message: `Check-in successful! Resource ${booking.resource.name} is active for your session.`,
-    booking: updated,
-  });
+  return ok(result);
 });

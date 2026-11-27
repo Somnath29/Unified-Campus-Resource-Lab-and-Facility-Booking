@@ -4,6 +4,7 @@ import { BookingStatus, ActivityType, PriorityLevel, Role, Prisma } from '@prism
 import { ApiError } from '@/lib/auth';
 export { ApiError };
 import env from '@/config/env';
+import { generateSecurePin, hashPin } from '@/lib/checkin-crypto';
 import {
   validateOperatingHours,
   getDayOfWeekInKolkata,
@@ -409,6 +410,7 @@ export class BookingService {
             priority: input.priority || PriorityLevel.NORMAL,
             status: initialStatus,
             checkInToken,
+            checkInPinHash: hashPin(checkInToken),
             releaseDeadline,
             departmentId: resource.department,
           },

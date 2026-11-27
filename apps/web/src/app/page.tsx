@@ -814,6 +814,7 @@ export default function DashboardPage() {
         onClose={() => setIsCheckInModalOpen(false)}
         booking={selectedBookingForCheckIn}
         onCheckInUpdated={() => loadDashboardData()}
+        userRole={user?.role}
       />
     </div>
   );

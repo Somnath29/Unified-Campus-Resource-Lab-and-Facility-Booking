@@ -157,25 +157,30 @@ export const GET = withErrorHandling(async (request: Request) => {
       maxWeeklyHours: quota.maxWeeklyHours,
       currentWeeklyHours: quota.currentWeeklyHours,
     },
-    upcomingBookings: upcomingList.map((b) => ({
+    upcomingBookings: upcomingList.map(({ checkInPinHash: _pinHash, ...b }) => ({
       ...b,
       startTime: b.startTime.toISOString(),
       endTime: b.endTime.toISOString(),
       createdAt: b.createdAt.toISOString(),
       updatedAt: b.updatedAt.toISOString(),
       resource: b.resource
-        ? {
-            ...b.resource,
+        ? (({ checkInSecretEncrypted: _sec, ...res }) => ({
+            ...res,
             createdAt: b.resource.createdAt.toISOString(),
-          }
+          }))(b.resource)
         : undefined,
     })) as any,
     recentActivity,
-    recommendedResources: recommendedResources.map((r) => ({
+    recommendedResources: recommendedResources.map(({ checkInSecretEncrypted: _sec, ...r }) => ({
       ...r,
       createdAt: r.createdAt.toISOString(),
     })) as any,
-    timetableClasses,
+    timetableClasses: timetableClasses.map((tc) => ({
+      ...tc,
+      resource: tc.resource
+        ? (({ checkInSecretEncrypted: _sec, ...res }) => res)(tc.resource)
+        : undefined,
+    })),
   };
 
   return ok(response);

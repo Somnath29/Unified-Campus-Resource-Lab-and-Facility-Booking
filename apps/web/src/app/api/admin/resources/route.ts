@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { created, withErrorHandling } from '@/lib/api-response';
 import { requireRole } from '@/lib/auth';
 import { Role, ResourceCategory } from '@prisma/client';
+import { encryptResourceSecret, generateResourceSecret } from '@/lib/checkin-crypto';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,9 @@ export const POST = withErrorHandling(async (request: Request) => {
       isAvailableNow: true,
       isUnderMaintenance: false,
       operatingHours: data.operatingHours || '08:00 AM - 08:00 PM',
+      checkInSecretEncrypted: encryptResourceSecret(generateResourceSecret()),
+      checkInSecretVersion: 1,
+      checkInSecretRotatedAt: new Date(),
     },
   });
 
@@ -40,5 +44,6 @@ export const POST = withErrorHandling(async (request: Request) => {
     },
   });
 
-  return created({ resource, message: 'Resource created successfully.' });
+  const { checkInSecretEncrypted: _omit, ...safeResource } = resource;
+  return created({ resource: safeResource, message: 'Resource created successfully.' });
 });

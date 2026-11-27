@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { hashPin } from '@/lib/checkin-crypto';
 import { prisma } from '@/lib/prisma';
 import {
   BookingStatus,
@@ -646,6 +647,7 @@ export class SeriesBookingService {
                 priority: input.priority || PriorityLevel.NORMAL,
                 status: p.initialStatus,
                 checkInToken,
+                checkInPinHash: hashPin(checkInToken),
                 releaseDeadline,
                 departmentId: resource.department,
               },
@@ -847,6 +849,7 @@ export class SeriesBookingService {
               priority: input.priority || PriorityLevel.NORMAL,
               status: p.initialStatus,
               checkInToken,
+              checkInPinHash: hashPin(checkInToken),
               releaseDeadline,
               departmentId: resource.department,
             },

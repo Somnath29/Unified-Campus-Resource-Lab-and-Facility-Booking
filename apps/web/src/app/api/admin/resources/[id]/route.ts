@@ -37,7 +37,8 @@ export const PUT = withErrorHandling(
       },
     });
 
-    return ok({ resource, message: 'Resource updated successfully.' });
+    const { checkInSecretEncrypted: _omit, ...safeResource } = resource;
+    return ok({ resource: safeResource, message: 'Resource updated successfully.' });
   }
 );
 

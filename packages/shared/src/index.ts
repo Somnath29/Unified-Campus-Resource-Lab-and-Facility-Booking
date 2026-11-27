@@ -171,6 +171,9 @@ export * from './resource';
 // Booking Preview, Dashboard & Smart Allocation Types (R4)
 export * from './booking';
 
+// Check-In Hardening Types (R8)
+export * from './checkin';
+
 
 
 
