@@ -8,6 +8,7 @@ import {
   PriorityLevel,
   Role,
   DeliveryStatus,
+  ResourceCategory,
 } from '@prisma/client';
 import env from '../src/config/env';
 import { ReminderService } from '../src/services/reminderService';
@@ -47,6 +48,7 @@ let approverToken: string;
 let resourceA: any;
 let approvalResource: any;
 let createdR9UserIds: string[] = [];
+let createdR9ResourceId: string | null = null;
 
 async function cleanup() {
   setTestEmailObserver(null);
@@ -76,11 +78,15 @@ async function cleanup() {
       OR: [
         { bookingNumber: { startsWith: 'LPU-TEST-R9-' } },
         { purpose: { contains: 'R9 Test' } },
+        ...(createdR9ResourceId ? [{ resourceId: createdR9ResourceId }] : []),
         ...(createdR9UserIds.length > 0 ? [{ userId: { in: createdR9UserIds } }] : []),
       ],
     },
   }).catch(() => {});
 
+  if (createdR9ResourceId) {
+    await prisma.resource.delete({ where: { id: createdR9ResourceId } }).catch(() => {});
+  }
   if (createdR9UserIds.length > 0) {
     await prisma.user.deleteMany({
       where: { id: { in: createdR9UserIds } },
@@ -138,9 +144,22 @@ async function setup() {
   studentBToken = signAuthToken({ id: studentB.id, email: studentB.email, role: studentB.role });
   approverToken = signAuthToken({ id: approver.id, email: approver.email, role: approver.role });
 
-  resourceA = await prisma.resource.findFirst({
-    where: { requiresApproval: false, deletedAt: null },
+  resourceA = await prisma.resource.create({
+    data: {
+      code: `R9-ROOM-${String(ts).slice(-6)}`,
+      name: `R9 Isolated Classroom ${String(ts).slice(-4)}`,
+      category: ResourceCategory.CLASSROOM,
+      department: 'Computer Science',
+      building: 'Block 34',
+      floor: '1st Floor',
+      capacity: 40,
+      amenities: ['Projector'],
+      imageUrl: 'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=600&q=80',
+      requiresApproval: false,
+      operatingHours: '08:00 AM - 08:00 PM',
+    },
   });
+  createdR9ResourceId = resourceA.id;
   approvalResource = await prisma.resource.findFirst({
     where: { requiresApproval: true, deletedAt: null },
   });

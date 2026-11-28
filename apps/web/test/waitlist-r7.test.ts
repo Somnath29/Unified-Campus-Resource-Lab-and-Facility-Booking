@@ -1147,9 +1147,35 @@ async function runAdditionalTests() {
 
   // TEST 23: Booking quota and policy validation enforced during acceptance
   try {
-    const testDate23 = addDaysKolkata(todayStr, 2);
-    const start = new Date(`${testDate23}T11:00:00+05:30`);
-    const end = new Date(`${testDate23}T12:00:00+05:30`);
+    let testDate23 = addDaysKolkata(todayStr, 2);
+    let start = new Date();
+    let end = new Date();
+    for (let d = 2; d <= 6; d++) {
+      const candDate = addDaysKolkata(todayStr, d);
+      const dayOfWeek = kolkataToUtc(candDate, '12:00').getUTCDay();
+      if (dayOfWeek === 0) continue;
+      let found = false;
+      for (const hr of [11, 14, 16, 17, 18]) {
+        const s = new Date(`${candDate}T${String(hr).padStart(2, '0')}:00:00+05:30`);
+        const e = new Date(`${candDate}T${String(hr + 1).padStart(2, '0')}:00:00+05:30`);
+        const clash = await prisma.booking.findFirst({
+          where: {
+            resourceId: autoResource.id,
+            status: { in: [BookingStatus.PENDING, BookingStatus.APPROVED, BookingStatus.CONFIRMED, BookingStatus.CHECKED_IN] },
+            startTime: { lt: e },
+            endTime: { gt: s },
+          },
+        });
+        if (!clash) {
+          testDate23 = candDate;
+          start = s;
+          end = e;
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
 
     // 23.1 Restricted user with 3 no-shows is rejected by policy engine during accept
     let policyUser = await prisma.user.findUnique({ where: { email: 'policy.test.student@lpu.in' } });

@@ -507,12 +507,61 @@ async function runR4Tests() {
   // SUITE 6: QR CODE PAYLOAD & RFC 5545 .ICS CALENDAR EXPORT
   // =========================================================================
   console.log('\n--- SUITE 6: QR CODE PAYLOAD & RFC 5545 .ICS CALENDAR EXPORT ---');
+  let suite6BookingId: string | null = null;
+  const suite6IdemKey = `r4-suite6-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   try {
-    const sampleBooking = await prisma.booking.findFirst({
-      where: { userId: studentUser.id },
+    // Find a free 1-hour slot on autoResource for an isolated R4-created booking
+    let slotStartIso = '';
+    let slotEndIso = '';
+    for (let dayOffset = 3; dayOffset <= 7 && !slotStartIso; dayOffset++) {
+      const candDate = addDaysKolkata(getCurrentKolkataDateString(), dayOffset);
+      const dayOfWeek = kolkataToUtc(candDate, '12:00').getUTCDay();
+      if (dayOfWeek === 0) continue; // skip Sunday
+      for (const hour of [18, 17, 16, 15, 14, 10]) {
+        const s = kolkataToUtc(candDate, `${String(hour).padStart(2, '0')}:00`);
+        const e = kolkataToUtc(candDate, `${String(hour + 1).padStart(2, '0')}:00`);
+        const clash = await prisma.booking.findFirst({
+          where: {
+            resourceId: autoResource.id,
+            status: { in: [BookingStatus.PENDING, BookingStatus.APPROVED, BookingStatus.CONFIRMED, BookingStatus.CHECKED_IN] },
+            startTime: { lt: e },
+            endTime: { gt: s },
+          },
+        });
+        if (!clash) {
+          slotStartIso = s.toISOString();
+          slotEndIso = e.toISOString();
+          break;
+        }
+      }
+    }
+    assert.ok(slotStartIso && slotEndIso, 'Free slot found for Suite 6 isolated booking');
+
+    const createRes = await fetch(`${BASE_URL}/api/bookings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${studentToken}`,
+        'Idempotency-Key': suite6IdemKey,
+      },
+      body: JSON.stringify({
+        resourceId: autoResource.id,
+        startTime: slotStartIso,
+        endTime: slotEndIso,
+        activityType: ActivityType.PROJECT_WORK,
+        purpose: 'R4 Suite 6 QR and ICS Verification',
+        expectedAttendance: 4,
+      }),
+    });
+    const createBody = await createRes.json();
+    assert.ok([200, 201].includes(createRes.status), `Suite 6 booking create failed: ${JSON.stringify(createBody)}`);
+    suite6BookingId = createBody.booking.id;
+
+    const sampleBooking = await prisma.booking.findUnique({
+      where: { id: suite6BookingId! },
       include: { resource: true },
     });
-    assert.ok(sampleBooking, 'Sample booking exists for format verification');
+    assert.ok(sampleBooking, 'Isolated Suite 6 booking exists in DB for format verification');
 
     // 1. PIN hash verification (no plaintext PIN stored in DB)
     assert.strictEqual(sampleBooking.checkInToken, null, 'Plaintext checkInToken must not be stored in DB');
@@ -566,6 +615,13 @@ async function runR4Tests() {
     pass('Generated .ics calendar file matches RFC 5545 specification with complete event metadata');
   } catch (err) {
     fail('Suite 6: QR Code & .ics Calendar failed', err);
+  } finally {
+    if (suite6BookingId) {
+      await prisma.booking.delete({ where: { id: suite6BookingId } }).catch(() => {});
+    }
+    await prisma.idempotencyKey
+      .deleteMany({ where: { userId: studentUser.id, key: suite6IdemKey } })
+      .catch(() => {});
   }
 
   // =========================================================================
